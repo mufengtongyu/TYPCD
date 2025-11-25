@@ -11,6 +11,7 @@ import pdb
 
 import torch
 import torch.nn as nn
+from torchvision.models import convnext_tiny
 
 
 class Combined_gph_x_Encoder(nn.Module):
@@ -117,74 +118,50 @@ class SelfAttention(nn.Module):
 
         return output
 
+
+class ConvGRUCell(nn.Module):
+    def __init__(self, input_channels, hidden_channels, kernel_size=3, padding=1):
+        super().__init__()
+        self.reset_gate = nn.Conv2d(input_channels + hidden_channels, hidden_channels, kernel_size, padding=padding)
+        self.update_gate = nn.Conv2d(input_channels + hidden_channels, hidden_channels, kernel_size, padding=padding)
+        self.out_gate = nn.Conv2d(input_channels + hidden_channels, hidden_channels, kernel_size, padding=padding)
+
+    def forward(self, x, h):
+        combined = torch.cat([x, h], dim=1)
+        reset = torch.sigmoid(self.reset_gate(combined))
+        update = torch.sigmoid(self.update_gate(combined))
+        combined_reset = torch.cat([x, reset * h], dim=1)
+        candidate = torch.tanh(self.out_gate(combined_reset))
+        h_new = (1 - update) * candidate + update * h
+        return h_new
+
 class SelfAttentionLSTM8(nn.Module):
     def __init__(self, in_channels=1):
         super(SelfAttentionLSTM8, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels, in_channels, kernel_size=1) #通道1--1
-        self.conv2 = nn.Conv2d(in_channels, in_channels, kernel_size=1)
-        self.conv3 = nn.Conv2d(in_channels, in_channels, kernel_size=1)
-        self.conv4 = nn.Conv2d(in_channels, in_channels, kernel_size=1)
-        self.conv5 = nn.Conv2d(in_channels, in_channels, kernel_size=1)
-        self.conv6 = nn.Conv2d(in_channels*2, in_channels, kernel_size=1)
+        self.gru_cell = ConvGRUCell(input_channels=in_channels + 1, hidden_channels=in_channels)
+        self.attention = nn.MultiheadAttention(embed_dim=in_channels, num_heads=1, batch_first=True)
 
-        self.conv7 = nn.Conv2d(in_channels*2, in_channels, kernel_size=1)
-        self.conv8 = nn.Conv2d(in_channels*2, in_channels, kernel_size=1)
-        self.conv9 = nn.Conv2d(in_channels*2, in_channels, kernel_size=1)
+    def apply_attention(self, hidden, context):
+        B, C, H, W = hidden.shape
+        query = hidden.flatten(2).transpose(1, 2)  # [B, HW, C]
+        key = context.flatten(2).transpose(1, 2)
+        value = context.flatten(2).transpose(1, 2)
+        attn_out, _ = self.attention(query, key, value)
+        attn_out = attn_out.transpose(1, 2).reshape(B, C, H, W)
+        return hidden + attn_out
 
-        self.conv10 = nn.Conv2d(in_channels*3, in_channels, kernel_size=1)
-        self.conv11 = nn.Conv2d(in_channels*3, in_channels, kernel_size=1)
-        self.conv12 = nn.Conv2d(in_channels*3, in_channels, kernel_size=1)
-        self.conv13 = nn.Conv2d(in_channels*3, in_channels, kernel_size=1)
-
-    def sa_conv_lstm(self, x, en_1d): ##torch.Size([8, 32, 1, 16, 16]) #[B,1,16,16]
-        # #看sa-conv-lstm的
-        # M,H：每一个小的 都是（B，256）
-        memory = torch.zeros_like(x[0])  # [32, 1, 16, 16]
-        H = torch.zeros_like(x[0])
-        C = torch.randn_like(x[0]) * 1e-6
-
-        for i in range(x.size(0)):  # 8次循环
-            a_xh = torch.sigmoid(self.conv10(torch.cat((H, x[i], en_1d), dim=1)))  #到单通道吗
-            ca_xh = C*a_xh
-            ga = torch.sigmoid(self.conv11(torch.cat((H, x[i], en_1d), dim=1)))
-            gv = torch.tanh(self.conv12(torch.cat((H, x[i], en_1d), dim=1)))
-            C = ca_xh + ga*gv
-            a_xh1 = torch.sigmoid(self.conv13(torch.cat((H, x[i], en_1d), dim=1)))
-            H = a_xh1*torch.tanh(C)
-            memory, H = self.self_attention_memory(memory, H)  # H:torch.Size([32, 1, 16, 16])
-        return H
-
-    def self_attention_memory(self, m, h): #[32, 1, 16, 16]
-        vh = self.conv1(h)
-        kh = self.conv2(h)
-        qh = self.conv3(h)
-        qh = torch.transpose(qh, 2, 3)
-        ah = F.softmax(kh*qh,dim=-1) #基本全是0.0625 0.0624
-        zh = vh*ah
-
-        km = self.conv4(m)
-        vm = self.conv5(m)
-        am = F.softmax(qh*km,dim=-1)
-        zm = vm*am
-        z0 = torch.cat((zh, zm), dim=1)
-        z = self.conv6(z0)
-        hz = torch.cat((h, z), dim=1)
-
-        ot = torch.sigmoid(self.conv7(hz))  #到单通道吗
-        gt = torch.tanh(self.conv8(hz))
-        it = torch.sigmoid(self.conv9(hz))
-
-        gi = gt*it
-        mf = (1-it)*m
-        mt = gi+mf
-        ht = ot*mt
-
-        return mt,ht
+    def sa_conv_gru(self, x, en_1d):
+        hidden = torch.zeros_like(x[0])
+        for i in range(x.size(0)):
+            gru_input = torch.cat((x[i], en_1d), dim=1)
+            hidden = self.gru_cell(gru_input, hidden)
+            hidden = self.apply_attention(hidden, x[i])
+        return hidden
 
     def forward(self, x, en_1d): #torch.Size([32, 8, 1, 16, 16]) #[B,1,16,16]
         B,_,_,_,_ = x.size()  #最好还是B,T,C,H,W
         x = x.permute(1, 0, 2, 3, 4) #torch.Size([8, 32, 1, 16, 16])
-        H = self.sa_conv_lstm(x, en_1d)#[B,1,16,16]
+        H = self.sa_conv_gru(x, en_1d)#[B,1,16,16]
         flattened_tensor = H.view(B, -1)
         return flattened_tensor #(B,256) 特别趋同
 
@@ -307,36 +284,14 @@ class TimeAwareEncoderForGPH10(nn.Module):
         self.image_size = image_size
         self.hidden_dim = hidden_dim
 
-        self.conv_layers2 = nn.Sequential(  #torch.Size([32, 1, 100, 100])
-            nn.Conv2d(in_channels=2, out_channels=32, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2),
+        self.convnext = convnext_tiny(weights=None)
+        self.convnext.features[0][0] = nn.Conv2d(2, 96, kernel_size=4, stride=4, padding=0)
 
-            SpatialAttention1(in_channels=64),   #[B,64,50,50]门控 x*G     G=sig(conv(x))
-
-            nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2),
-
-            SpatialAttention1(in_channels=128),  #[B,128,25,25]
-
-            nn.Conv2d(in_channels=128, out_channels=256, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2),
-            SpatialAttention1(in_channels=256)  #torch.Size([B, 256, 12, 12])
-
+        self.gph_head = nn.Sequential(
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Flatten(),
+            nn.Linear(768, 256)
         )
-
-        self.conv = nn.Conv2d(in_channels=16, out_channels=1, kernel_size=3, stride=3)
-
-        self.linear = nn.Linear(12, 256)
-
-        # self.rnn = nn.GRU(
-        #     input_size = 256 * (image_size // 8) ** 2,
-        #     # input_size=32 * (image_size // 4) ** 2,
-        #                   hidden_size=hidden_dim, batch_first=True)
 
         self.encode_time = SelfAttentionLSTM8(in_channels=1)
 
@@ -378,13 +333,9 @@ class TimeAwareEncoderForGPH10(nn.Module):
         for t in range(self.point_num): #一起编码呗 #torch.Size([B, 1, 100, 100])
             x_t = torch.cat((x[:, t, :, :].unsqueeze(1), x_t_center[:, t, :, :].unsqueeze(1)), dim=1) # Get the data for the current time step
 
-            x_t = self.conv_layers2(x_t)  # torch.Size([32, 256, 12, 12])
-
-            # 首先 reshape 成 [B, 16, 48, 48]
-            x_t = x_t.view(batch_size, 16, 48, 48)
-
-            # 编码成 [B, 1, 16, 16]，这里使用卷积层来实现
-            x_t = self.conv(x_t)  # 用 3x3 的卷积核 torch.Size([32, 1, 16, 16])
+            features = self.convnext.features(x_t)
+            gph_embedding = self.gph_head(features)
+            x_t = gph_embedding.view(batch_size, 1, 16, 16)
             x_list.append(x_t)
 
         x = torch.stack(x_list, dim=1)  # torch.Size([32, 8, 1, 16, 16])
@@ -1257,9 +1208,9 @@ class MultimodalGenerativeCVAE(object):
         #   Node History Encoder   #
         ############################
         self.add_submodule(self.node_type + '/node_history_encoder',
-                           model_if_absent=nn.LSTM(input_size=self.state_length, #暂时是6 它会自己改的 那就好
-                                                   hidden_size=self.hyperparams['enc_rnn_dim_history'],
-                                                   batch_first=True))
+                           model_if_absent=nn.GRU(input_size=self.state_length, #暂时是6 它会自己改的 那就好
+                                                  hidden_size=self.hyperparams['enc_rnn_dim_history'],
+                                                  batch_first=True))
 
         self.add_submodule(self.node_type + '/gph_data_encoder',
                            model_if_absent=nn.LSTM(input_size=32,
