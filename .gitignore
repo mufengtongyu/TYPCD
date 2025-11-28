@@ -20,6 +20,15 @@ venv/
 *.pkl
 *.tar
 
+# 忽略所有图片
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.svg
+*.webp
+*.bmp
+
 # ==== 实验输出 / 中间结果 ====
 experiments/
 models/backup/
