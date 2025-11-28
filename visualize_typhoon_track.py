@@ -16,7 +16,6 @@ from easydict import EasyDict
 
 
 from dataset.preprocessing import get_timesteps_data
-from evaluation.evaluation import compute_ade_x_y_traj_each_time
 from evaluation.trajectory_utils import prediction_output_to_trajectories
 from models.autoencoder import AutoEncoder
 from models.trajectron import Trajectron
@@ -40,6 +39,11 @@ def parse_args() -> argparse.Namespace:
         "--output",
         default="fig/typhoon_prediction.png",
         help="Path to save the visualization",
+    )
+    parser.add_argument(
+        "--zoom-output",
+        default="fig/typhoon_prediction_zoom.png",
+        help="Path to save the zoomed-in visualization",
     )
     parser.add_argument(
         "--scene-index",
@@ -119,9 +123,34 @@ def build_inference_components(config: EasyDict, checkpoint_path: str, device: t
 
 
 def denormalize_positions(points: np.ndarray) -> np.ndarray:
-    lon = points[..., 0] / 10.0 * 500.0 + 1300.0
-    lat = points[..., 1] / 6.0 * 300.0 + 300
-    return np.stack([lon / 10.0, lat / 10.0], axis=-1)
+    # lon = points[..., 0] / 10.0 * 500.0 + 1300.0
+    # lat = points[..., 1] / 6.0 * 300.0 + 300
+    # return np.stack([lon / 10.0, lat / 10.0], axis=-1)
+    """Convert serialized coordinates back to geographic degrees.
+
+        The training data stores longitude/latitude using the same affine
+        transform applied during evaluation (see ``compute_ade_x_y_traj_each_time``):
+
+        * normalized_x -> (x / 10 * 500 + 1800)  (tenth degrees of longitude)
+        * normalized_y -> (y / 6  * 300)         (tenth degrees of latitude)
+
+        Some intermediate tensors (e.g., outputs from ``compute_ade_x_y_traj_each_time``)
+        are already in tenth-degree units. We therefore detect large values and only
+        apply the affine transform when the inputs are still normalized.
+    """
+
+    points = np.asarray(points, dtype=np.float64)
+    if np.isnan(points).all():
+        return points
+
+    # If values are already in tenth-degrees (e.g., 1000-1800 for longitude),
+    # simply convert to degrees.
+    if np.nanmax(np.abs(points)) > 400:
+        return points / 10.0
+
+    lon_tenth = points[..., 0] / 10.0 * 500.0 + 1300.0
+    lat_tenth = points[..., 1] / 6.0 * 300.0 + 300.0
+    return np.stack([lon_tenth / 10.0, lat_tenth / 10.0], axis=-1)
 
 
 def prepare_batch_prediction(
@@ -183,42 +212,47 @@ def prepare_batch_prediction(
         ts_key = list(prediction_dict.keys())[0]
         node_key = list(prediction_dict[ts_key].keys())[0]
 
-        _, _, _, predicted_trajs, gt_traj = compute_ade_x_y_traj_each_time(
-            prediction_dict[ts_key][node_key], futures_dict[ts_key][node_key]
-        )
+        predicted_trajs = prediction_dict[ts_key][node_key][0, :, :, :2]
+        history_raw = histories_dict[ts_key][node_key][:, :2]
+        future_raw = futures_dict[ts_key][node_key][:, :2]
 
-        history_raw = histories_dict[ts_key][node_key]
-        future_raw = futures_dict[ts_key][node_key]
-        return predicted_trajs, history_raw, future_raw
+        # Keep the last 8 history points and the next 4 ground-truth points to
+        # match the visualization specification.
+        return predicted_trajs, history_raw[-8:], future_raw[:4]
 
     raise RuntimeError("No valid batches found for visualization.")
 
 
-def select_probability_cone(pred_trajs: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    if pred_trajs.shape[0] < 2:
-        return pred_trajs[0], pred_trajs[0]
-    final_points = pred_trajs[:, -1, :]
-    dists = np.linalg.norm(final_points[None, ...] - final_points[:, None, :], axis=-1)
-    max_pair = np.unravel_index(np.argmax(dists), dists.shape)
-    return pred_trajs[max_pair[0]], pred_trajs[max_pair[1]]
+def _convex_hull(points: np.ndarray) -> np.ndarray:
+    """Compute the convex hull of a set of 2D points using Andrew's monotone chain."""
+
+    points = np.asarray(points)
+    if len(points) <= 1:
+        return points
+    
+    # Sort points lexicographically by x, then y.
+    points_sorted = points[np.lexsort((points[:, 1], points[:, 0]))]
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower = []
+    for p in points_sorted:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+    upper = []
+    for p in reversed(points_sorted):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+    # Concatenate lower and upper to get full hull; last element of each list is omitted
+    # because it is repeated at the beginning of the other list.
+    hull = np.vstack((lower[:-1], upper[:-1]))
+    return hull
 
 
-def plot_paths(
-    predicted_trajs: np.ndarray,
-    history: np.ndarray,
-    future: np.ndarray,
-    output_path: str,
-):
-    predicted_deg = denormalize_positions(np.asarray(predicted_trajs))
-    history_deg = denormalize_positions(np.asarray(history)[:, :2])
-    future_deg = denormalize_positions(np.asarray(future)[:, :2])
-
-    cone_a, cone_b = select_probability_cone(predicted_deg)
-    cone_coords = np.vstack([cone_a, cone_b[::-1]])
-
-    lon_min, lon_max = 100, 180
-    lat_min, lat_max = 0, 50
-
+def _get_axes_with_basemap(lon_min: float, lon_max: float, lat_min: float, lat_max: float):
     try:
         import cartopy.crs as ccrs
         import cartopy.feature as cfeature
@@ -240,53 +274,78 @@ def plot_paths(
         ax.set_ylabel("Latitude (°)")
         ax.grid(True, linestyle="--", linewidth=0.5)
         plot_kwargs = {}
+    return fig, ax, plot_kwargs
 
-    ax.fill(
-        cone_coords[:, 0],
-        cone_coords[:, 1],
-        color="limegreen",
-        alpha=0.5,
-        zorder=1,
-        label="Probability cone",
-        **plot_kwargs,
-    )
+
+def _plot_tracks_on_axis(
+    ax,
+    predicted_deg: np.ndarray,
+    history_deg: np.ndarray,
+    future_deg: np.ndarray,
+    plot_kwargs: Dict,
+):
+    current_point = history_deg[-1]
+
+    cone_points = np.vstack([current_point, predicted_deg.reshape(-1, 2)])
+    cone_hull = _convex_hull(cone_points)
+    if len(cone_hull) >= 3:
+        ax.fill(
+            cone_hull[:, 0],
+            cone_hull[:, 1],
+            color="limegreen",
+            alpha=0.5,
+            zorder=1,
+            label="Probability cone",
+            **plot_kwargs,
+        )
 
     ax.plot(
         history_deg[:, 0],
         history_deg[:, 1],
-        "o--",
-        color="red",
+        "o-",
+        color="black",
+        markerfacecolor="black",
+        markeredgecolor="black",
+        markersize=2,
         label="History",
         zorder=3,
         **plot_kwargs,
     )
+    future_with_current = np.vstack([current_point, future_deg])
+
     ax.plot(
-        future_deg[:, 0],
-        future_deg[:, 1],
-        "o--",
+        future_with_current[:, 0],
+        future_with_current[:, 1],
+        "o-",
         color="red",
+        markerfacecolor="red",
+        markeredgecolor="red",
+        markersize=2,
         label="Future ground truth",
         zorder=3,
         **plot_kwargs,
     )
     ax.plot(
-        history_deg[-1, 0],
-        history_deg[-1, 1],
+        current_point[0],
+        current_point[1],
         "o",
         color="blue",
         label="Current position",
-        markersize=8,
+        markersize=4,
         zorder=4,
         **plot_kwargs,
     )
 
     for idx, traj in enumerate(predicted_deg):
+        predicted_with_current = np.vstack([current_point, traj])
         ax.plot(
-            traj[:, 0],
-            traj[:, 1],
-            "o--",
+            predicted_with_current[:, 0],
+            predicted_with_current[:, 1],
+            "o:",
             color="green",
-            markersize=5,
+            markerfacecolor="green",
+            markeredgecolor="green",
+            markersize=3,
             linewidth=1,
             label="Predicted trajectories" if idx == 0 else None,
             zorder=6,
@@ -294,12 +353,49 @@ def plot_paths(
         )
 
     ax.legend(loc="best")
+
+
+def plot_paths(
+    predicted_trajs: np.ndarray,
+    history: np.ndarray,
+    future: np.ndarray,
+    output_path: str,
+    zoom_output_path: str,
+):
+    predicted_deg = denormalize_positions(np.asarray(predicted_trajs))
+    history_deg = denormalize_positions(np.asarray(history))
+    future_deg = denormalize_positions(np.asarray(future))
+
+    # Full Northwest Pacific view
+    fig, ax, plot_kwargs = _get_axes_with_basemap(100, 180, 0, 50)
+    _plot_tracks_on_axis(ax, predicted_deg, history_deg, future_deg, plot_kwargs)
+
     output_dir = os.path.dirname(output_path)
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
     plt.tight_layout()
-    plt.savefig(output_path, dpi=300)
+    plt.savefig(output_path, dpi=500)
     plt.close(fig)
+
+    # Zoomed view centered on the track to keep the trajectory near 80% of the frame
+    all_points = np.vstack([history_deg, future_deg, predicted_deg.reshape(-1, 2)])
+    lon_min, lat_min = np.nanmin(all_points, axis=0)
+    lon_max, lat_max = np.nanmax(all_points, axis=0)
+    lon_pad = (lon_max - lon_min) * 0.1
+    lat_pad = (lat_max - lat_min) * 0.1
+    lon_min -= lon_pad
+    lon_max += lon_pad
+    lat_min -= lat_pad
+    lat_max += lat_pad
+
+    fig_zoom, ax_zoom, plot_kwargs_zoom = _get_axes_with_basemap(lon_min, lon_max, lat_min, lat_max)
+    _plot_tracks_on_axis(ax_zoom, predicted_deg, history_deg, future_deg, plot_kwargs_zoom)
+    zoom_dir = os.path.dirname(zoom_output_path)
+    if zoom_dir:
+        os.makedirs(zoom_dir, exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(zoom_output_path, dpi=300)
+    plt.close(fig_zoom)
 
 
 def main():
@@ -316,8 +412,8 @@ def main():
         args.scene_index,
         args.timestep_stride,
     )
-    plot_paths(predicted_trajs, history_raw, future_raw, args.output)
-    print(f"Visualization saved to {args.output}")
+    plot_paths(predicted_trajs, history_raw, future_raw, args.output, args.zoom_output)
+    print(f"Visualization saved to {args.output} and {args.zoom_output}")
 
 
 if __name__ == "__main__":
