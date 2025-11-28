@@ -42,7 +42,7 @@ def main():
 
     for k, v in vars(args).items():
        config[k] = v
-    config["exp_name"] = 'WP_GRU_ConvNeXt_AdaLN_DiT_loss_1125'
+    config["exp_name"] = 'WP_epoch160'
 
     config["train_dataset"] = args.train_dataset
     config["eval_dataset"] = args.eval_dataset
@@ -55,7 +55,7 @@ def main():
                 60, 50, 40, 30, 20, 10]
         # test = [190, 180, 170, 160, 150, 140, 130, 120, 110, 100, 90, 80, 70,
                 # 60, 50, 40, 30, 20, 10]
-        test = [190]  # 测试时 future都固定值
+        test = [160]  # 测试时 future都固定值
 
         for i in test:
             config.eval_at = i
