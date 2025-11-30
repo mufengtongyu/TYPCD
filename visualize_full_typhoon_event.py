@@ -125,13 +125,52 @@ def _best_predictions_by_horizon(
     return predicted_trajs[best_indices, np.arange(future.shape[0])]
 
 
+def _get_axes_with_raster_basemap(
+    lon_min: float,
+    lon_max: float,
+    lat_min: float,
+    lat_max: float,
+    raster_path: str,
+):
+    try:
+        import cartopy.crs as ccrs
+        import rasterio
+
+        fig = plt.figure(figsize=(10, 8))
+        ax = plt.axes(projection=ccrs.PlateCarree())
+        ax.set_extent([lon_min, lon_max, lat_min, lat_max], crs=ccrs.PlateCarree())
+
+        with rasterio.open(raster_path) as src:
+            image = src.read()
+            image = np.moveaxis(image, 0, -1)
+            bounds = src.bounds
+            extent = [bounds.left, bounds.right, bounds.bottom, bounds.top]
+            ax.imshow(image, origin="upper", extent=extent, transform=ccrs.PlateCarree())
+
+        gl = ax.gridlines(draw_labels=True, linestyle="--", linewidth=0.5)
+        gl.top_labels = False
+        gl.right_labels = False
+        plot_kwargs = {"transform": ccrs.PlateCarree()}
+    except ImportError:
+        fig, ax = plt.subplots(figsize=(10, 8))
+        ax.set_xlim(lon_min, lon_max)
+        ax.set_ylim(lat_min, lat_max)
+        ax.set_xlabel("Longitude (°)")
+        ax.set_ylabel("Latitude (°)")
+        ax.grid(True, linestyle="--", linewidth=0.5)
+        plot_kwargs = {}
+
+    return fig, ax, plot_kwargs
+
+
 def _plot_track_pair(
     history_track: np.ndarray,
     predicted_track: np.ndarray,
     output_path: str,
     title: str,
+    axes_builder=_get_axes_with_basemap,
 ) -> None:
-    fig, ax, plot_kwargs = _get_axes_with_basemap(100, 180, 0, 50)
+    fig, ax, plot_kwargs = axes_builder(100, 180, 0, 50)
     ax.plot(
         history_track[:, 0],
         history_track[:, 1],
@@ -158,7 +197,7 @@ def _plot_track_pair(
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
     fig.tight_layout()
-    fig.savefig(output_path, dpi=300)
+    fig.savefig(output_path, dpi=300, bbox_inches="tight", pad_inches=0)
     plt.close(fig)
 
 
@@ -362,6 +401,9 @@ def main() -> None:
             predicted_tracks_deg[idx],
             horizon_output,
             f"{hours}h best forecast track",
+            axes_builder=lambda a, b, c, d: _get_axes_with_raster_basemap(
+                a, b, c, d, "/mnt/e/data/HYP_LR_SR_OB_DR/HYP_LR_SR_OB_DR.tif"
+            ),
         )
 
     print(
