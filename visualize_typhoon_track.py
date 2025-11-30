@@ -139,7 +139,21 @@ def denormalize_positions(points: np.ndarray) -> np.ndarray:
         apply the affine transform when the inputs are still normalized.
     """
 
-    points = np.asarray(points, dtype=np.float64)
+    try:
+        points = np.asarray(points, dtype=np.float64)
+    except (TypeError, ValueError):
+        # Some call sites may pass objects that include non-numeric values (e.g.,
+        # accidental string inputs). Coerce those entries to NaN so plotting can
+        # proceed using only the valid coordinates.
+        raw = np.asarray(points, dtype=object)
+        coerced = np.full(raw.shape, np.nan, dtype=np.float64)
+        it = np.nditer(raw, flags=["multi_index", "refs_ok"], op_flags=["readonly"])
+        for value in it:
+            try:
+                coerced[it.multi_index] = float(value)
+            except (TypeError, ValueError):
+                coerced[it.multi_index] = np.nan
+        points = coerced
     if np.isnan(points).all():
         return points
 
@@ -332,7 +346,7 @@ def _plot_tracks_on_axis(
         color="blue",
         label="Current position",
         markersize=4,
-        zorder=4,
+        zorder=8,
         **plot_kwargs,
     )
 
@@ -345,12 +359,28 @@ def _plot_tracks_on_axis(
             color="green",
             markerfacecolor="green",
             markeredgecolor="green",
-            markersize=3,
+            markersize=2,
             linewidth=1,
             label="Predicted trajectories" if idx == 0 else None,
             zorder=6,
             **plot_kwargs,
         )
+    
+    ensemble_mean = np.nanmean(predicted_deg, axis=0)
+    ensemble_with_current = np.vstack([current_point, ensemble_mean])
+    ax.plot(
+        ensemble_with_current[:, 0],
+        ensemble_with_current[:, 1],
+        "o-.",
+        color="green",
+        markerfacecolor="green",
+        markeredgecolor="green",
+        markersize=5,
+        linewidth=1.5,
+        label="Ensemble mean trajectory",
+        zorder=7,
+        **plot_kwargs,
+    )
 
     ax.legend(loc="best")
 
@@ -373,8 +403,8 @@ def plot_paths(
     output_dir = os.path.dirname(output_path)
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=500)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=500, bbox_inches="tight", pad_inches=0)
     plt.close(fig)
 
     # Zoomed view centered on the track to keep the trajectory near 80% of the frame
@@ -393,8 +423,8 @@ def plot_paths(
     zoom_dir = os.path.dirname(zoom_output_path)
     if zoom_dir:
         os.makedirs(zoom_dir, exist_ok=True)
-    plt.tight_layout()
-    plt.savefig(zoom_output_path, dpi=300)
+    fig_zoom.tight_layout()
+    fig_zoom.savefig(zoom_output_path, dpi=300, bbox_inches="tight", pad_inches=0)
     plt.close(fig_zoom)
 
 

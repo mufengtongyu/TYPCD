@@ -46,7 +46,9 @@ class TCDDIFFUSER():
                 eval_ade_batch_errors = []
                 eval_fde_batch_errors = []
                 eval_distance_batch_errors = []
+                eval_distance_mean_batch_errors = []
                 eval_real_dev_batch_errors = []
+                eval_real_dev_mean_batch_errors = []
                 eval_predicted_trajs_batch_errors = []
                 eval_gt_trajs_batch_errors = []
                 eval_gt_inten_wind_batch_errors = []
@@ -54,9 +56,14 @@ class TCDDIFFUSER():
                 eval_predicted_inten_wind_batch_errors = []
                 eval_inten_di_batch_errors = []
                 eval_wind_di_batch_errors = []
+                eval_inten_di_mean_batch_errors = []
+                eval_wind_di_mean_batch_errors = []
+
 
                 eval_real_dev_intensity_batch_errors = []
                 eval_real_dev_wind_batch_errors = []
+                eval_real_dev_intensity_mean_batch_errors = []
+                eval_real_dev_wind_mean_batch_errors = []
 
                 ph = self.hyperparams['prediction_horizon']
                 max_hl = self.hyperparams['maximum_history_length']
@@ -102,18 +109,30 @@ class TCDDIFFUSER():
 
                         eval_distance_batch_errors = np.hstack(
                             (eval_distance_batch_errors, batch_error_dict[node_type]['distance']))
+                        eval_distance_mean_batch_errors = np.hstack(
+                            (eval_distance_mean_batch_errors, batch_error_dict[node_type]['distance_mean']))
 
                         eval_inten_di_batch_errors = np.hstack(
                             (eval_inten_di_batch_errors, batch_error_dict[node_type]['inten_di']))
                         eval_wind_di_batch_errors = np.hstack(
                             (eval_wind_di_batch_errors, batch_error_dict[node_type]['wind_di']))
+                        eval_inten_di_mean_batch_errors = np.hstack(
+                            (eval_inten_di_mean_batch_errors, batch_error_dict[node_type]['inten_di_mean']))
+                        eval_wind_di_mean_batch_errors = np.hstack(
+                            (eval_wind_di_mean_batch_errors, batch_error_dict[node_type]['wind_di_mean']))
 
                         for sublist in batch_error_dict[node_type]['real_dev']:
                             eval_real_dev_batch_errors.append(sublist)
+                        for sublist in batch_error_dict[node_type]['real_dev_mean']:
+                            eval_real_dev_mean_batch_errors.append(sublist)
                         for sublist in batch_error_dict[node_type]['real_dev_intensity']:
                             eval_real_dev_intensity_batch_errors.append(sublist)
                         for sublist in batch_error_dict[node_type]['real_dev_wind']:
                             eval_real_dev_wind_batch_errors.append(sublist)
+                        for sublist in batch_error_dict[node_type]['real_dev_intensity_mean']:
+                            eval_real_dev_intensity_mean_batch_errors.append(sublist)
+                        for sublist in batch_error_dict[node_type]['real_dev_wind_mean']:
+                            eval_real_dev_wind_mean_batch_errors.append(sublist)
 
                         for sublist in batch_error_dict[node_type]['predicted_trajs']:
                             eval_predicted_trajs_batch_errors.append(sublist)
@@ -131,32 +150,50 @@ class TCDDIFFUSER():
                 fde = np.mean(eval_fde_batch_errors)
 
                 distance = np.mean(eval_distance_batch_errors)  # 293
+                distance_mean = np.mean(eval_distance_mean_batch_errors)
 
                 aver_list_trajectory = [sum(item) / len(item) for item in zip(*eval_real_dev_batch_errors)]
+                aver_list_trajectory_mean = [sum(item) / len(item) for item in zip(*eval_real_dev_mean_batch_errors)]
 
                 aver_list_intensity = [sum(item) / len(item) for item in zip(*eval_real_dev_intensity_batch_errors)]
+                aver_list_intensity_mean = [sum(item) / len(item) for item in zip(*eval_real_dev_intensity_mean_batch_errors)]
                 sum_inten = sum(aver_list_intensity)
+                sum_inten_mean = sum(aver_list_intensity_mean)
 
                 aver_list_wind = [sum(item) / len(item) for item in zip(*eval_real_dev_wind_batch_errors)]
+                aver_list_wind_mean = [sum(item) / len(item) for item in zip(*eval_real_dev_wind_mean_batch_errors)]
                 sum_wind = sum(aver_list_wind)
+                sum_wind_mean = sum(aver_list_wind_mean)
 
                 print(f"Epoch {epoch} Best Of 20: ADE: {ade} FDE: {fde}")
                 self.log.info(f"Best of 20: Epoch {epoch} ADE: {ade} FDE: {fde}")
                 print(f"SUM of trajectory error：{distance}  ")
+                print(f"SUM of trajectory error (mean per timestep)：{distance_mean}  ")
                 print(f"SUM of intensity error: {sum_inten}  ")
+                print(f"SUM of intensity error (mean per timestep): {sum_inten_mean}  ")
                 print(f"SUM of wind speed error: {sum_wind}  ")
+                print(f"SUM of wind speed error (mean per timestep): {sum_wind_mean}  ")
                 print(f"Error of 4 trajectory: {aver_list_trajectory}")
+                print(f"Error of 4 trajectory (mean per timestep): {aver_list_trajectory_mean}")
                 print(f"Error of 4 intensity: {aver_list_intensity} ")
+                print(f"Error of 4 intensity (mean per timestep): {aver_list_intensity_mean} ")
                 print(f"Error of 4 wind: {aver_list_wind}")
+                print(f"Error of 4 wind (mean per timestep): {aver_list_wind_mean}")
 
                 with open(self.save_test_result_file_name, 'a') as file:  # output_WP_WP_env_10_fusion5
                     file.write(f"{epoch} in validation==================================\n")
                     file.write(f"SUM of trajectory error：{distance}\n")
+                    file.write(f"SUM of trajectory error (mean per timestep)：{distance_mean}\n")
                     file.write(f"SUM of intensity error: {sum_inten}\n")
+                    file.write(f"SUM of intensity error (mean per timestep): {sum_inten_mean}\n")
                     file.write(f"SUM of wind speed error: {sum_wind}\n")
+                    file.write(f"SUM of wind speed error (mean per timestep): {sum_wind_mean}\n")
                     file.write(f"Error of 4 trajectory: {aver_list_trajectory}\n")
+                    file.write(f"Error of 4 trajectory (mean per timestep): {aver_list_trajectory_mean}\n")
                     file.write(f"Error of 4 intensity: {aver_list_intensity} \n")
+                    file.write(f"Error of 4 intensity (mean per timestep): {aver_list_intensity_mean} \n")
                     file.write(f"Error of 4 wind: {aver_list_wind}\n")
+                    file.write(f"Error of 4 wind (mean per timestep): {aver_list_wind_mean}\n")
 
                 # Saving model
                 checkpoint = {
@@ -176,7 +213,9 @@ class TCDDIFFUSER():
         eval_ade_batch_errors = []
         eval_fde_batch_errors = []
         eval_distance_batch_errors = []
+        eval_distance_mean_batch_errors = []
         eval_real_dev_batch_errors = []
+        eval_real_dev_mean_batch_errors = []
         eval_predicted_trajs_batch_errors = []
         eval_gt_trajs_batch_errors = []
         eval_gt_inten_wind_batch_errors = []
@@ -187,9 +226,13 @@ class TCDDIFFUSER():
         #wind+intensity
         eval_inten_di_batch_errors = []
         eval_wind_di_batch_errors = []
+        eval_inten_di_mean_batch_errors = []
+        eval_wind_di_mean_batch_errors = []
 
         eval_real_dev_intensity_batch_errors = []
         eval_real_dev_wind_batch_errors = []
+        eval_real_dev_intensity_mean_batch_errors = []
+        eval_real_dev_wind_mean_batch_errors = []
 
         ph = self.hyperparams['prediction_horizon']
         max_hl = self.hyperparams['maximum_history_length']
@@ -238,17 +281,30 @@ class TCDDIFFUSER():
                 eval_distance_batch_errors = np.hstack(
                     (eval_distance_batch_errors, batch_error_dict[node_type]['distance']))
 
+                eval_distance_mean_batch_errors = np.hstack(
+                    (eval_distance_mean_batch_errors, batch_error_dict[node_type]['distance_mean']))
+
                 eval_inten_di_batch_errors = np.hstack(
                     (eval_inten_di_batch_errors, batch_error_dict[node_type]['inten_di']))
                 eval_wind_di_batch_errors = np.hstack(
                     (eval_wind_di_batch_errors, batch_error_dict[node_type]['wind_di']))
+                eval_inten_di_mean_batch_errors = np.hstack(
+                    (eval_inten_di_mean_batch_errors, batch_error_dict[node_type]['inten_di_mean']))
+                eval_wind_di_mean_batch_errors = np.hstack(
+                    (eval_wind_di_mean_batch_errors, batch_error_dict[node_type]['wind_di_mean']))
 
                 for sublist in batch_error_dict[node_type]['real_dev']:
                     eval_real_dev_batch_errors.append(sublist)
+                for sublist in batch_error_dict[node_type]['real_dev_mean']:
+                    eval_real_dev_mean_batch_errors.append(sublist)
                 for sublist in batch_error_dict[node_type]['real_dev_intensity']:
                     eval_real_dev_intensity_batch_errors.append(sublist)
                 for sublist in batch_error_dict[node_type]['real_dev_wind']:
                     eval_real_dev_wind_batch_errors.append(sublist)
+                for sublist in batch_error_dict[node_type]['real_dev_intensity_mean']:
+                    eval_real_dev_intensity_mean_batch_errors.append(sublist)
+                for sublist in batch_error_dict[node_type]['real_dev_wind_mean']:
+                    eval_real_dev_wind_mean_batch_errors.append(sublist)
 
                 for sublist in batch_error_dict[node_type]['predicted_trajs']:
                     eval_predicted_trajs_batch_errors.append(sublist)
@@ -267,31 +323,50 @@ class TCDDIFFUSER():
 
         distance = np.mean(eval_distance_batch_errors)
 
+        distance_mean = np.mean(eval_distance_mean_batch_errors)
+
         aver_list_trajectory = [sum(item) / len(item) for item in zip(*eval_real_dev_batch_errors)]
+        aver_list_trajectory_mean = [sum(item) / len(item) for item in zip(*eval_real_dev_mean_batch_errors)]
 
         aver_list_intensity = [sum(item) / len(item) for item in zip(*eval_real_dev_intensity_batch_errors)]
+        aver_list_intensity_mean = [sum(item) / len(item) for item in zip(*eval_real_dev_intensity_mean_batch_errors)]
         sum_inten = sum(aver_list_intensity)
+        sum_inten_mean = sum(aver_list_intensity_mean)
 
         aver_list_wind = [sum(item) / len(item) for item in zip(*eval_real_dev_wind_batch_errors)]
+        aver_list_wind_mean = [sum(item) / len(item) for item in zip(*eval_real_dev_wind_mean_batch_errors)]
         sum_wind = sum(aver_list_wind)
+        sum_wind_mean = sum(aver_list_wind_mean)
 
         print(f"Sampling: {sampling} Stride: {step}")
         print(f"Epoch {epoch} ")
         print(f"SUM of trajectory error：{distance}  ")
+        print(f"SUM of trajectory error (mean per timestep)：{distance_mean}  ")
         print(f"SUM of intensity error: {sum_inten}  ")
+        print(f"SUM of intensity error (mean per timestep): {sum_inten_mean}  ")
         print(f"SUM of wind speed error: {sum_wind}  ")
+        print(f"SUM of wind speed error (mean per timestep): {sum_wind_mean}  ")
         print(f"Error of 4 trajectory: {aver_list_trajectory}")
+        print(f"Error of 4 trajectory (mean per timestep): {aver_list_trajectory_mean}")
         print(f"Error of 4 intensity: {aver_list_intensity} ")
+        print(f"Error of 4 intensity (mean per timestep): {aver_list_intensity_mean} ")
         print(f"Error of 4 wind: {aver_list_wind}")
+        print(f"Error of 4 wind (mean per timestep): {aver_list_wind_mean}")
 
         with open(self.save_test_result_file_name, 'a') as file:
             file.write(f"Epoch {epoch}==================================\n")
             file.write(f"SUM of trajectory error：{distance}\n")
+            file.write(f"SUM of trajectory error (mean per timestep)：{distance_mean}\n")
             file.write(f"SUM of intensity error: {sum_inten}\n")
+            file.write(f"SUM of intensity error (mean per timestep): {sum_inten_mean}\n")
             file.write(f"SUM of wind speed error: {sum_wind}\n")
+            file.write(f"SUM of wind speed error (mean per timestep): {sum_wind_mean}\n")
             file.write(f"Error of 4 trajectory: {aver_list_trajectory}\n")
+            file.write(f"Error of 4 trajectory (mean per timestep): {aver_list_trajectory_mean}\n")
             file.write(f"Error of 4 intensity: {aver_list_intensity} \n")
+            file.write(f"Error of 4 intensity (mean per timestep): {aver_list_intensity_mean} \n")
             file.write(f"Error of 4 wind: {aver_list_wind}\n")
+            file.write(f"Error of 4 wind (mean per timestep): {aver_list_wind_mean}\n")
 
     def _build(self):
         self._build_dir()

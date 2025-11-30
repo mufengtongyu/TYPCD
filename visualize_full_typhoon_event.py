@@ -70,6 +70,12 @@ def parse_args() -> argparse.Namespace:
         help="Directory to save per-horizon track visualizations",
     )
     parser.add_argument(
+        "--horizon-reduction",
+        choices=["min", "mean"],
+        default="mean",
+        help="How to aggregate ensemble errors when drawing per-horizon summaries.",
+    )
+    parser.add_argument(
         "--scene-index",
         type=int,
         default=24,
@@ -110,13 +116,20 @@ def _sanitize_label(label: str) -> str:
 
 
 def _best_predictions_by_horizon(
-    predicted_trajs: np.ndarray, future: np.ndarray
+    predicted_trajs: np.ndarray, future: np.ndarray, reduction: str = "min"
 ) -> np.ndarray:
-    """Return the predicted point with minimum error for each forecast horizon."""
+    """Return per-horizon representative predictions using the requested reduction."""
 
     future = future[: predicted_trajs.shape[1]]
     if future.shape[0] == 0:
         return np.empty((0, 2))
+    
+    if reduction == "mean":
+        mean_points = np.nanmean(predicted_trajs, axis=0)
+        return mean_points[: future.shape[0]]
+
+    if reduction != "min":
+        raise ValueError(f"Unsupported reduction '{reduction}'. Use 'min' or 'mean'.")
 
     # predicted_trajs: (num_samples, horizon, 2)
     diff = predicted_trajs - future[None, ...]
@@ -125,13 +138,52 @@ def _best_predictions_by_horizon(
     return predicted_trajs[best_indices, np.arange(future.shape[0])]
 
 
+def _get_axes_with_raster_basemap(
+    lon_min: float,
+    lon_max: float,
+    lat_min: float,
+    lat_max: float,
+    raster_path: str,
+):
+    try:
+        import cartopy.crs as ccrs
+        import rasterio
+
+        fig = plt.figure(figsize=(10, 8))
+        ax = plt.axes(projection=ccrs.PlateCarree())
+        ax.set_extent([lon_min, lon_max, lat_min, lat_max], crs=ccrs.PlateCarree())
+
+        with rasterio.open(raster_path) as src:
+            image = src.read()
+            image = np.moveaxis(image, 0, -1)
+            bounds = src.bounds
+            extent = [bounds.left, bounds.right, bounds.bottom, bounds.top]
+            ax.imshow(image, origin="upper", extent=extent, transform=ccrs.PlateCarree())
+
+        gl = ax.gridlines(draw_labels=True, linestyle="--", linewidth=0.5)
+        gl.top_labels = False
+        gl.right_labels = False
+        plot_kwargs = {"transform": ccrs.PlateCarree()}
+    except ImportError:
+        fig, ax = plt.subplots(figsize=(10, 8))
+        ax.set_xlim(lon_min, lon_max)
+        ax.set_ylim(lat_min, lat_max)
+        ax.set_xlabel("Longitude (°)")
+        ax.set_ylabel("Latitude (°)")
+        ax.grid(True, linestyle="--", linewidth=0.5)
+        plot_kwargs = {}
+
+    return fig, ax, plot_kwargs
+
+
 def _plot_track_pair(
     history_track: np.ndarray,
     predicted_track: np.ndarray,
     output_path: str,
     title: str,
+    axes_builder=_get_axes_with_basemap,
 ) -> None:
-    fig, ax, plot_kwargs = _get_axes_with_basemap(100, 180, 0, 50)
+    fig, ax, plot_kwargs = axes_builder(100, 180, 0, 50)
     ax.plot(
         history_track[:, 0],
         history_track[:, 1],
@@ -158,7 +210,7 @@ def _plot_track_pair(
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
     fig.tight_layout()
-    fig.savefig(output_path, dpi=300)
+    fig.savefig(output_path, dpi=300, bbox_inches="tight", pad_inches=0)
     plt.close(fig)
 
 
@@ -288,13 +340,14 @@ def _get_full_track(node) -> np.ndarray:
 
 def _prepare_tracks(
     frame_predictions: List[FramePrediction],
+    horizon_reduction: str,
     full_track_raw: np.ndarray,
 ) -> Tuple[np.ndarray, List[np.ndarray]]:
     history_track_deg = denormalize_positions(full_track_raw)
 
     predicted_by_horizon: List[List[np.ndarray]] = []
     for ts, predicted_trajs, _history_raw, future_raw in frame_predictions:
-        best_points = _best_predictions_by_horizon(predicted_trajs, future_raw)
+        best_points = _best_predictions_by_horizon(predicted_trajs, future_raw, reduction=horizon_reduction)
         if best_points.size == 0:
             continue
 
@@ -341,7 +394,11 @@ def main() -> None:
     )
 
     full_track_raw = _get_full_track(target_node)
-    history_track_deg, predicted_tracks_deg = _prepare_tracks(frame_predictions, full_track_raw)
+    history_track_deg, predicted_tracks_deg = _prepare_tracks(
+        frame_predictions, 
+        args.horizon_reduction, 
+        full_track_raw
+    )
 
     summary_predicted = predicted_tracks_deg[0]
     _plot_track_pair(
@@ -362,6 +419,9 @@ def main() -> None:
             predicted_tracks_deg[idx],
             horizon_output,
             f"{hours}h best forecast track",
+            axes_builder=lambda a, b, c, d: _get_axes_with_raster_basemap(
+                a, b, c, d, "/mnt/e/data/HYP_LR_SR_OB_DR/HYP_LR_SR_OB_DR.tif"
+            ),
         )
 
     print(
