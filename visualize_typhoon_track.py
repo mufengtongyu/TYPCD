@@ -373,8 +373,8 @@ def plot_paths(
     output_dir = os.path.dirname(output_path)
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=500)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=500, bbox_inches="tight", pad_inches=0)
     plt.close(fig)
 
     # Zoomed view centered on the track to keep the trajectory near 80% of the frame
@@ -393,8 +393,8 @@ def plot_paths(
     zoom_dir = os.path.dirname(zoom_output_path)
     if zoom_dir:
         os.makedirs(zoom_dir, exist_ok=True)
-    plt.tight_layout()
-    plt.savefig(zoom_output_path, dpi=300)
+    fig_zoom.tight_layout()
+    fig_zoom.savefig(zoom_output_path, dpi=300, bbox_inches="tight", pad_inches=0)
     plt.close(fig_zoom)
 
 
