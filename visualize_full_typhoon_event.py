@@ -70,6 +70,12 @@ def parse_args() -> argparse.Namespace:
         help="Directory to save per-horizon track visualizations",
     )
     parser.add_argument(
+        "--horizon-reduction",
+        choices=["min", "mean"],
+        default="min",
+        help="How to aggregate ensemble errors when drawing per-horizon summaries.",
+    )
+    parser.add_argument(
         "--scene-index",
         type=int,
         default=24,
@@ -110,13 +116,20 @@ def _sanitize_label(label: str) -> str:
 
 
 def _best_predictions_by_horizon(
-    predicted_trajs: np.ndarray, future: np.ndarray
+    predicted_trajs: np.ndarray, future: np.ndarray, reduction: str = "min"
 ) -> np.ndarray:
-    """Return the predicted point with minimum error for each forecast horizon."""
+    """Return per-horizon representative predictions using the requested reduction."""
 
     future = future[: predicted_trajs.shape[1]]
     if future.shape[0] == 0:
         return np.empty((0, 2))
+
+    if reduction == "mean":
+        mean_points = np.nanmean(predicted_trajs, axis=0)
+        return mean_points[: future.shape[0]]
+
+    if reduction != "min":
+        raise ValueError(f"Unsupported reduction '{reduction}'. Use 'min' or 'mean'.")
 
     # predicted_trajs: (num_samples, horizon, 2)
     diff = predicted_trajs - future[None, ...]
@@ -328,12 +341,13 @@ def _get_full_track(node) -> np.ndarray:
 def _prepare_tracks(
     frame_predictions: List[FramePrediction],
     full_track_raw: np.ndarray,
+    horizon_reduction: str,
 ) -> Tuple[np.ndarray, List[np.ndarray]]:
     history_track_deg = denormalize_positions(full_track_raw)
 
     predicted_by_horizon: List[List[np.ndarray]] = []
     for ts, predicted_trajs, _history_raw, future_raw in frame_predictions:
-        best_points = _best_predictions_by_horizon(predicted_trajs, future_raw)
+        best_points = _best_predictions_by_horizon(predicted_trajs, future_raw, reduction=horizon_reduction)
         if best_points.size == 0:
             continue
 
@@ -380,7 +394,7 @@ def main() -> None:
     )
 
     full_track_raw = _get_full_track(target_node)
-    history_track_deg, predicted_tracks_deg = _prepare_tracks(frame_predictions, full_track_raw)
+    history_track_deg, predicted_tracks_deg = _prepare_tracks(frame_predictions, full_track_raw, args.horizon_reduction)
 
     summary_predicted = predicted_tracks_deg[0]
     _plot_track_pair(

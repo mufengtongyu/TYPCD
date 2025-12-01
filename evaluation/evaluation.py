@@ -130,9 +130,12 @@ def compute_ade_x_y_traj_each_time(predicted_trajs, gt_traj):
     for t in range(loss.size(1)):
         min_value_of_4_time[t], min_index[t] = torch.min(loss[:, t], dim=0)
 
-    sum_min_value = torch.sum(min_value_of_4_time, dim=-1)
+    mean_value_of_4_time = torch.mean(loss, dim=0)
 
-    return sum_min_value, min_index, min_value_of_4_time, predicted_trajs, gt_traj_copy #-,-,实际误差最小的一条轨迹的误差值（4）
+    sum_min_value = torch.sum(min_value_of_4_time, dim=-1)
+    sum_mean_value = torch.sum(mean_value_of_4_time, dim=-1)
+
+    return sum_min_value, min_index, min_value_of_4_time, predicted_trajs, gt_traj_copy, sum_mean_value, mean_value_of_4_time #-,-,实际误差最小的一条轨迹的误差值（4）
 
 # <class 'tuple'>: (1, 6, 4, 4)
 def compute_ade_x_y_intensity_each_time(predicted_trajs, gt_traj):
@@ -177,12 +180,18 @@ def compute_ade_x_y_intensity_each_time(predicted_trajs, gt_traj):
     for t in range(abs_wind.size(1)):
         min_value_wind[t], min_index_wind[t] = torch.min(abs_wind[:, t], dim=0)
 
+    mean_value_intensity = torch.mean(abs_inten, dim=0)
+    mean_value_wind = torch.mean(abs_wind, dim=0)
+
     sum_min_value_intensity = torch.sum(min_value_intensity, dim=-1)
     sum_min_value_wind = torch.sum(min_value_wind, dim=-1)
+    sum_mean_value_intensity = torch.sum(mean_value_intensity, dim=-1)
+    sum_mean_value_wind = torch.sum(mean_value_wind, dim=-1)
 
     return sum_min_value_intensity, sum_min_value_wind, min_index_intensity, min_index_wind, \
            min_value_intensity, min_value_wind,\
-           predicted_trajs, gt_traj_copy #-,-,实际误差最小的一条轨迹的误差值（4）
+           predicted_trajs, gt_traj_copy, sum_mean_value_intensity, sum_mean_value_wind, \
+           mean_value_intensity, mean_value_wind #-,-,实际误差最小的一条轨迹的误差值（4）
 
 def compute_ade_x_y_traj_aver(predicted_trajs, gt_traj):
     predicted_trajs = predicted_trajs[:, :, :, 0:2]
@@ -343,10 +352,12 @@ def compute_batch_statistics(prediction_output_dict, #预测的轨迹结果
     batch_error_dict = dict()
     for node_type in node_type_enum:
         batch_error_dict[node_type] = {'ade': list(), 'fde': list(),
-                                       'distance': list(),
+                                       'distance': list(), 'distance_mean': list(),
                                        'inten_di': list(), 'wind_di': list(),
-                                       'real_dev': list(),
+                                       'inten_di_mean': list(), 'wind_di_mean': list(),
+                                       'real_dev': list(), 'real_dev_mean': list(),
                                        'real_dev_intensity': list(),'real_dev_wind': list(),
+                                       'real_dev_intensity_mean': list(), 'real_dev_wind_mean': list(),
                                        'predicted_trajs': list(),
                                        'predicted_inten_wind': list(),
                                        'gt_trajs': list(),
@@ -363,13 +374,14 @@ def compute_batch_statistics(prediction_output_dict, #预测的轨迹结果
             #torch.Size([]) torch.Size([]) torch.Size([4])
             #                min_index, loss[min_index.item(),:]
             min_of_20_value, min_index, real_dev_distance, \
-            predicted_trajs, gt_traj_copy = compute_ade_x_y_traj_each_time(prediction_dict[t][node], futures_dict[t][node]) #计算sample得到的prediction_dict与futures_dict之间的误差
+            predicted_trajs, gt_traj_copy, mean_of_20_value, mean_dev_distance = compute_ade_x_y_traj_each_time(prediction_dict[t][node], futures_dict[t][node]) #计算sample得到的prediction_dict与futures_dict之间的误差
             # compute_ade_x_y_traj_aver  compute_ade_x_y_traj_each_time
 
             min_of_20_value_intensity, min_of_20_value_wind,\
             min_index_intensity, min_index_wind, \
             real_dev_distance_intensity, real_dev_distance_wind,\
-            predicted_inten_wind, gt_inten_wind_copy = compute_ade_x_y_intensity_each_time(
+            predicted_inten_wind, gt_inten_wind_copy, mean_of_20_value_intensity, mean_of_20_value_wind, \
+            mean_dev_distance_intensity, mean_dev_distance_wind = compute_ade_x_y_intensity_each_time(
                 prediction_dict[t][node], futures_dict[t][node])  # 计算sample得到的prediction_dict与futures_dict之间的误差
             #compute_ade_x_y_intensity_aver  compute_ade_x_y_intensity_each_time
             gt_trajs = gt_traj_copy[0]
@@ -395,17 +407,23 @@ def compute_batch_statistics(prediction_output_dict, #预测的轨迹结果
             batch_error_dict[node.type]['fde'].extend(list(fde_errors))
 
             batch_error_dict[node.type]['distance'].extend([min_of_20_value])
+            batch_error_dict[node.type]['distance_mean'].extend([mean_of_20_value])
 
             batch_error_dict[node.type]['inten_di'].extend([min_of_20_value_intensity])
             batch_error_dict[node.type]['wind_di'].extend([min_of_20_value_wind])
+            batch_error_dict[node.type]['inten_di_mean'].extend([mean_of_20_value_intensity])
+            batch_error_dict[node.type]['wind_di_mean'].extend([mean_of_20_value_wind])
 
             real_dev_distance_intensity = torch.abs(real_dev_distance_intensity)
             real_dev_distance_wind = torch.abs(real_dev_distance_wind)
 
             batch_error_dict[node.type]['real_dev'].append(real_dev_distance.tolist())
+            batch_error_dict[node.type]['real_dev_mean'].append(mean_dev_distance.tolist())
 
             batch_error_dict[node.type]['real_dev_intensity'].append(real_dev_distance_intensity.tolist())
             batch_error_dict[node.type]['real_dev_wind'].append(real_dev_distance_wind.tolist())
+            batch_error_dict[node.type]['real_dev_intensity_mean'].append(mean_dev_distance_intensity.tolist())
+            batch_error_dict[node.type]['real_dev_wind_mean'].append(mean_dev_distance_wind.tolist())
 
             batch_error_dict[node.type]['predicted_trajs'].append(list(predicted_trajs))
 
