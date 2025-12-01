@@ -78,7 +78,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--scene-index",
         type=int,
-        default=24,
+        default=18,
         help="Index of the evaluation scene to visualize",
     )
     parser.add_argument(

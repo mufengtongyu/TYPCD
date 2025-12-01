@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--scene-index",
         type=int,
-        default=0,
+        default=2,
         help="Index of the evaluation scene to visualize",
     )
     parser.add_argument(
@@ -291,6 +291,47 @@ def _get_axes_with_basemap(lon_min: float, lon_max: float, lat_min: float, lat_m
     return fig, ax, plot_kwargs
 
 
+def _get_axes_with_raster_basemap(
+    lon_min: float,
+    lon_max: float,
+    lat_min: float,
+    lat_max: float,
+    raster_path: str,
+    figsize: tuple = (10, 8),
+):
+    """Return axes configured with a raster basemap when available."""
+
+    try:
+        import cartopy.crs as ccrs
+        import rasterio
+
+        fig = plt.figure(figsize=figsize)
+        ax = plt.axes(projection=ccrs.PlateCarree())
+        ax.set_extent([lon_min, lon_max, lat_min, lat_max], crs=ccrs.PlateCarree())
+
+        with rasterio.open(raster_path) as src:
+            image = src.read()
+            image = np.moveaxis(image, 0, -1)
+            bounds = src.bounds
+            extent = [bounds.left, bounds.right, bounds.bottom, bounds.top]
+            ax.imshow(image, origin="upper", extent=extent, transform=ccrs.PlateCarree())
+
+        gl = ax.gridlines(draw_labels=True, linestyle="--", linewidth=0.5)
+        gl.top_labels = False
+        gl.right_labels = False
+        plot_kwargs = {"transform": ccrs.PlateCarree()}
+    except ImportError:
+        fig, ax = plt.subplots(figsize=figsize)
+        ax.set_xlim(lon_min, lon_max)
+        ax.set_ylim(lat_min, lat_max)
+        ax.set_xlabel("Longitude (°)")
+        ax.set_ylabel("Latitude (°)")
+        ax.grid(True, linestyle="--", linewidth=0.5)
+        plot_kwargs = {}
+
+    return fig, ax, plot_kwargs
+
+
 def _plot_tracks_on_axis(
     ax,
     predicted_deg: np.ndarray,
@@ -345,7 +386,7 @@ def _plot_tracks_on_axis(
         "o",
         color="blue",
         label="Current position",
-        markersize=4,
+        markersize=3,
         zorder=8,
         **plot_kwargs,
     )
@@ -359,7 +400,7 @@ def _plot_tracks_on_axis(
             color="green",
             markerfacecolor="green",
             markeredgecolor="green",
-            markersize=2,
+            markersize=1,
             linewidth=1,
             label="Predicted trajectories" if idx == 0 else None,
             zorder=6,
@@ -375,7 +416,7 @@ def _plot_tracks_on_axis(
         color="green",
         markerfacecolor="green",
         markeredgecolor="green",
-        markersize=5,
+        markersize=2,
         linewidth=1.5,
         label="Ensemble mean trajectory",
         zorder=7,
@@ -392,12 +433,15 @@ def plot_paths(
     output_path: str,
     zoom_output_path: str,
 ):
+    raster_path = "/mnt/e/data/HYP_LR_SR_OB_DR/HYP_LR_SR_OB_DR.tif"
     predicted_deg = denormalize_positions(np.asarray(predicted_trajs))
     history_deg = denormalize_positions(np.asarray(history))
     future_deg = denormalize_positions(np.asarray(future))
 
     # Full Northwest Pacific view
-    fig, ax, plot_kwargs = _get_axes_with_basemap(100, 180, 0, 50)
+    fig, ax, plot_kwargs = _get_axes_with_raster_basemap(
+        100, 180, 0, 50, raster_path
+    )
     _plot_tracks_on_axis(ax, predicted_deg, history_deg, future_deg, plot_kwargs)
 
     output_dir = os.path.dirname(output_path)
@@ -411,14 +455,28 @@ def plot_paths(
     all_points = np.vstack([history_deg, future_deg, predicted_deg.reshape(-1, 2)])
     lon_min, lat_min = np.nanmin(all_points, axis=0)
     lon_max, lat_max = np.nanmax(all_points, axis=0)
-    lon_pad = (lon_max - lon_min) * 0.1
-    lat_pad = (lat_max - lat_min) * 0.1
-    lon_min -= lon_pad
-    lon_max += lon_pad
-    lat_min -= lat_pad
-    lat_max += lat_pad
+    lon_span = max(lon_max - lon_min, 1e-6)
+    lat_span = max(lat_max - lat_min, 1e-6)
+    target_width = lon_span / 0.6
+    target_height = lat_span / 0.6
 
-    fig_zoom, ax_zoom, plot_kwargs_zoom = _get_axes_with_basemap(lon_min, lon_max, lat_min, lat_max)
+    desired_height_from_width = target_width * 3 / 4
+    desired_width_from_height = target_height * 4 / 3
+
+    final_width = max(target_width, desired_width_from_height)
+    final_height = max(target_height, desired_height_from_width)
+
+    lon_center = (lon_max + lon_min) / 2
+    lat_center = (lat_max + lat_min) / 2
+
+    lon_min_zoom = lon_center - final_width / 2
+    lon_max_zoom = lon_center + final_width / 2
+    lat_min_zoom = lat_center - final_height / 2
+    lat_max_zoom = lat_center + final_height / 2
+
+    fig_zoom, ax_zoom, plot_kwargs_zoom = _get_axes_with_raster_basemap(
+        lon_min_zoom, lon_max_zoom, lat_min_zoom, lat_max_zoom, raster_path, figsize=(12, 9)
+    )
     _plot_tracks_on_axis(ax_zoom, predicted_deg, history_deg, future_deg, plot_kwargs_zoom)
     zoom_dir = os.path.dirname(zoom_output_path)
     if zoom_dir:
