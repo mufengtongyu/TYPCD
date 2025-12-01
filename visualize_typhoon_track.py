@@ -423,6 +423,22 @@ def _plot_tracks_on_axis(
         **plot_kwargs,
     )
 
+    ensemble_mean = np.nanmean(predicted_deg, axis=0)
+    ensemble_with_current = np.vstack([current_point, ensemble_mean])
+    ax.plot(
+        ensemble_with_current[:, 0],
+        ensemble_with_current[:, 1],
+        "o-.",
+        color="green",
+        markerfacecolor="green",
+        markeredgecolor="green",
+        markersize=5,
+        linewidth=1.5,
+        label="Ensemble mean trajectory",
+        zorder=7,
+        **plot_kwargs,
+    )
+
     ax.legend(loc="best")
 
 

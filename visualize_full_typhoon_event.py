@@ -131,6 +131,13 @@ def _best_predictions_by_horizon(
     if reduction != "min":
         raise ValueError(f"Unsupported reduction '{reduction}'. Use 'min' or 'mean'.")
 
+    if reduction == "mean":
+        mean_points = np.nanmean(predicted_trajs, axis=0)
+        return mean_points[: future.shape[0]]
+
+    if reduction != "min":
+        raise ValueError(f"Unsupported reduction '{reduction}'. Use 'min' or 'mean'.")
+
     # predicted_trajs: (num_samples, horizon, 2)
     diff = predicted_trajs - future[None, ...]
     errors = np.linalg.norm(diff, axis=-1)
@@ -342,6 +349,7 @@ def _prepare_tracks(
     frame_predictions: List[FramePrediction],
     horizon_reduction: str,
     full_track_raw: np.ndarray,
+    # horizon_reduction: str,
 ) -> Tuple[np.ndarray, List[np.ndarray]]:
     history_track_deg = denormalize_positions(full_track_raw)
 

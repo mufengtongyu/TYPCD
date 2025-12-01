@@ -184,6 +184,8 @@ def compute_ade_x_y_intensity_each_time(predicted_trajs, gt_traj):
     
     sum_min_value_intensity = torch.sum(min_value_intensity, dim=-1)
     sum_min_value_wind = torch.sum(min_value_wind, dim=-1)
+    sum_mean_value_intensity = torch.sum(mean_value_intensity, dim=-1)
+    sum_mean_value_wind = torch.sum(mean_value_wind, dim=-1)
 
     sum_mean_value_intensity = torch.sum(mean_value_intensity, dim=-1)
     sum_mean_value_wind = torch.sum(mean_value_wind, dim=-1)

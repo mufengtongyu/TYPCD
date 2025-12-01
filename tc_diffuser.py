@@ -59,7 +59,6 @@ class TCDDIFFUSER():
                 eval_inten_di_mean_batch_errors = []
                 eval_wind_di_mean_batch_errors = []
 
-
                 eval_real_dev_intensity_batch_errors = []
                 eval_real_dev_wind_batch_errors = []
                 eval_real_dev_intensity_mean_batch_errors = []
@@ -280,6 +279,8 @@ class TCDDIFFUSER():
 
                 eval_distance_batch_errors = np.hstack(
                     (eval_distance_batch_errors, batch_error_dict[node_type]['distance']))
+                eval_distance_mean_batch_errors = np.hstack(
+                    (eval_distance_mean_batch_errors, batch_error_dict[node_type]['distance_mean']))
 
                 eval_distance_mean_batch_errors = np.hstack(
                     (eval_distance_mean_batch_errors, batch_error_dict[node_type]['distance_mean']))
@@ -322,6 +323,7 @@ class TCDDIFFUSER():
         fde = np.mean(eval_fde_batch_errors)
 
         distance = np.mean(eval_distance_batch_errors)
+        distance_mean = np.mean(eval_distance_mean_batch_errors)
 
         distance_mean = np.mean(eval_distance_mean_batch_errors)
 
