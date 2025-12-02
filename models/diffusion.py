@@ -217,274 +217,274 @@ class TrajNet(Module):
 
 # 1125
 
-class TransformerConcatLinear(Module):
-    def __init__(self, point_dim, context_dim, tf_layer, residual):
-        super().__init__()
-        self.residual = residual # False
-        self.pos_emb = PositionalEncoding(d_model=2*context_dim, dropout=0.1, max_len=24)
-        self.concat1_2 = ConcatSquashLinear(context_dim, 2 * context_dim, context_dim + 3)
-        self.layer = nn.TransformerEncoderLayer(d_model=2*context_dim, nhead=4, dim_feedforward=4*context_dim)
-        self.transformer_encoder = nn.TransformerEncoder(self.layer, num_layers=tf_layer)
-        self.concat3 = ConcatSquashLinear(2*context_dim,context_dim,context_dim+3)
-        self.concat4 = ConcatSquashLinear(context_dim,context_dim//2,context_dim+3)
-        self.linear = ConcatSquashLinear(context_dim//2, point_dim, context_dim+3)
-        self.concat5 = ConcatSquashLinear(point_dim, point_dim, point_dim)
-        self.linear_true = Linear(128, point_dim)
-
-        self.concat_env_age_x_traj = ConcatSquashLinear(2, 128, 32)
-        self.concat_env_age_x_inten = ConcatSquashLinear(1, 64, 36)
-        self.concat_env_age_x_wind = ConcatSquashLinear(1, 64, 20)
-
-        self.concat1 = ConcatSquashLinear(point_dim, 2 * context_dim,
-                                          context_dim + 3)  # context_dim:384?  #ctx_emb:torch.Size([B, 1, 387]) x:torch.Size([B, 4, 4])
-        #_type1
-        # self.concat_env_age_x_traj_type1 = ConcatSquashLinear(2, 2, 32)
-        # self.concat_env_age_x_inten_type1 = ConcatSquashLinear(1, 1, 36)
-        # self.concat_env_age_x_wind_type1 = ConcatSquashLinear(1, 1, 20)  # x的输入维度,输出的维度，ctx的输入维度
-
-        # self.concat1_type2 = ConcatSquashLinear(point_dim, 2 * context_dim, 347)
-        # self.concat3_type2 = ConcatSquashLinear(2 * context_dim, context_dim, 347)
-        # self.concat4_type2 = ConcatSquashLinear(context_dim, context_dim // 2, 347)
-        # self.linear_type2 = ConcatSquashLinear(context_dim // 2, point_dim, 347)
-
-        #=======================================================
-        # Missing key(s) in state_dict: ,
-        #========================================================
-    # self.net(c0 * x_0 + c1 * e_rand, beta=beta, context=context,
-    #                            encoded_age = encoded_age)
-
-    def ptask_then_pshare(self, x, beta, context
-                , encoded_age,encoded_env_data):
-        batch_size = x.size(0)
-        beta = beta.view(batch_size, 1, 1)  # (B, 1, 1) torch.Size([B, 1, 1])
-        context = context.view(batch_size, 1, -1)  # (B, 1, F) torch.Size([B, 1, 256])--torch.Size([B, 1, 384])
-
-        encoded_age = encoded_age.view(batch_size, 1, -1)  # (B,1,4)
-        env_traj = encoded_env_data[0].to(x.device).view(batch_size, 1, -1)
-        env_inten = encoded_env_data[1].to(x.device).view(batch_size, 1, -1)
-        env_wind = encoded_env_data[2].to(x.device).view(batch_size, 1, -1)
-
-        # 轨迹
-        ctx_emb_env_age_traj = env_traj
-        ctx_emb_env_age_traj = ctx_emb_env_age_traj / 100
-        # 强度
-        ctx_emb_env_age_inten = torch.cat([env_inten, encoded_age], dim=-1)
-        ctx_emb_env_age_inten = ctx_emb_env_age_inten / 100
-        # 风速
-        ctx_emb_env_age_wind = torch.cat([env_wind, encoded_age], dim=-1)  # (B, 1, 20)
-        ctx_emb_env_age_wind = ctx_emb_env_age_wind / 100
-
-        x_traj = self.concat_env_age_x_traj(ctx_emb_env_age_traj,
-                                            x[:, :, 0:2])  # (B, 1, 84) (B,4,4)  输出torch.Size([256, 4, 256])
-        x_inten = self.concat_env_age_x_inten(ctx_emb_env_age_inten, x[:, :, 2:3])
-        x_wind = self.concat_env_age_x_wind(ctx_emb_env_age_wind, x[:, :, 3:4])
-        x = torch.cat((x_traj, x_inten, x_wind), dim=2)
-
-        time_emb = torch.cat([beta, torch.sin(beta), torch.cos(beta)], dim=-1)  # (B, 1, 3)
-        ctx_emb = torch.cat([time_emb, context], dim=-1)  # (B, 1, F+3) torch.Size([B, 1, 259])
-
-        x = self.concat1_2(ctx_emb, x)  # [B, 4, 512]
-        # 【B,4,512】
-        final_emb = x.permute(1, 0, 2)  # torch.Size([4, B, 512])
-        final_emb = self.pos_emb(final_emb)  # torch.Size([4, B, 512])
-        trans = self.transformer_encoder(final_emb).permute(1, 0, 2)  # torch.Size([B, 4, 512])
-        trans = self.concat3(ctx_emb, trans)  # torch.Size([B, 4, 256])
-        trans = self.concat4(ctx_emb, trans)  # torch.Size([B, 4, 128])
-        trans = self.linear(ctx_emb, trans)  # torch.Size([B, 4, 4])  #直接从512缩小到4
-        return trans
-    def pshare_then_ptask(self, x, beta, context
-                , encoded_age,encoded_env_data):
-        batch_size = x.size(0)
-        beta = beta.view(batch_size, 1, 1)  # (B, 1, 1) torch.Size([B, 1, 1])
-        context = context.view(batch_size, 1, -1)  # (B, 1, F) torch.Size([B, 1, 256])--torch.Size([B, 1, 384])
-
-        encoded_age = encoded_age.view(batch_size, 1, -1)  # (B,1,4)
-        env_traj = encoded_env_data[0].to(x.device).view(batch_size, 1, -1)
-        env_inten = encoded_env_data[1].to(x.device).view(batch_size, 1, -1)
-        env_wind = encoded_env_data[2].to(x.device).view(batch_size, 1, -1)
-
-        # 轨迹
-        ctx_emb_env_age_traj = env_traj
-        ctx_emb_env_age_traj = ctx_emb_env_age_traj / 100
-        # 强度
-        ctx_emb_env_age_inten = torch.cat([env_inten, encoded_age], dim=-1)
-        ctx_emb_env_age_inten = ctx_emb_env_age_inten / 100
-        # 风速
-        ctx_emb_env_age_wind = torch.cat([env_wind, encoded_age], dim=-1)  # (B, 1, 20)
-        ctx_emb_env_age_wind = ctx_emb_env_age_wind / 100
-
-        time_emb = torch.cat([beta, torch.sin(beta), torch.cos(beta)], dim=-1)  # (B, 1, 3)
-        ctx_emb = torch.cat([time_emb, context], dim=-1)  # (B, 1, F+3) torch.Size([B, 1, 259])
-
-        x = self.concat1(ctx_emb, x)  # [B, 4, 512]
-        # 【B,4,512】
-        final_emb = x.permute(1, 0, 2)  # torch.Size([4, B, 512])
-        final_emb = self.pos_emb(final_emb)  # torch.Size([4, B, 512])
-        trans = self.transformer_encoder(final_emb).permute(1, 0, 2)  # torch.Size([B, 4, 512])
-        trans = self.concat3(ctx_emb, trans)  # torch.Size([B, 4, 256])
-        trans = self.concat4(ctx_emb, trans)  # torch.Size([B, 4, 128])
-        trans = self.linear(ctx_emb, trans)  # torch.Size([B, 4, 4])  #
-
-        x_traj = self.concat_env_age_x_traj_type1(ctx_emb_env_age_traj,
-                                            trans[:, :, 0:2])  # (B, 1, 84) (B,4,4)  输出torch.Size([256, 4, 256])
-        x_inten = self.concat_env_age_x_inten_type1(ctx_emb_env_age_inten, trans[:, :, 2:3])
-        x_wind = self.concat_env_age_x_wind_type1(ctx_emb_env_age_wind, trans[:, :, 3:4])
-        x = torch.cat((x_traj, x_inten, x_wind), dim=2)
-        return x
-    def pshare_and_ptask(self, x, beta, context
-                , encoded_age,encoded_env_data):
-        batch_size = x.size(0)
-        beta = beta.view(batch_size, 1, 1)  # (B, 1, 1) torch.Size([B, 1, 1])
-        context = context.view(batch_size, 1, -1)  # (B, 1, F) torch.Size([B, 1, 256])--torch.Size([B, 1, 384])
-
-        encoded_age = encoded_age.view(batch_size, 1, -1)  # (B,1,4)
-        env_traj = encoded_env_data[0].to(x.device).view(batch_size, 1, -1)
-        env_inten = encoded_env_data[1].to(x.device).view(batch_size, 1, -1)
-        env_wind = encoded_env_data[2].to(x.device).view(batch_size, 1, -1)
-
-        # 轨迹
-        ctx_emb_env_age_traj = env_traj
-        ctx_emb_env_age_traj = ctx_emb_env_age_traj / 100
-        # 强度
-        ctx_emb_env_age_inten = torch.cat([env_inten, encoded_age], dim=-1)
-        ctx_emb_env_age_inten = ctx_emb_env_age_inten / 100
-        # 风速
-        ctx_emb_env_age_wind = torch.cat([env_wind, encoded_age], dim=-1)  # (B, 1, 20)
-        ctx_emb_env_age_wind = ctx_emb_env_age_wind / 100
-
-        p_task = torch.cat((ctx_emb_env_age_traj, ctx_emb_env_age_inten, ctx_emb_env_age_wind), dim=2)
-
-        time_emb = torch.cat([beta, torch.sin(beta), torch.cos(beta)], dim=-1)  # (B, 1, 3)
-        ctx_emb = torch.cat([time_emb, context, p_task], dim=-1)  # (B, 1, F+3) torch.Size([B, 1, 347])
-
-        x = self.concat1_type2(ctx_emb, x)  # [B, 4, 512]
-        # 【B,4,512】
-        final_emb = x.permute(1, 0, 2)  # torch.Size([4, B, 512])
-        final_emb = self.pos_emb(final_emb)  # torch.Size([4, B, 512])
-        trans = self.transformer_encoder(final_emb).permute(1, 0, 2)  # torch.Size([B, 4, 512])
-        trans = self.concat3_type2(ctx_emb, trans)  # torch.Size([B, 4, 256])
-        trans = self.concat4_type2(ctx_emb, trans)  # torch.Size([B, 4, 128])
-        trans = self.linear_type2(ctx_emb, trans)  # torch.Size([B, 4, 4])  #直接从512缩小到4
-        return trans
-    def forward(self, x, beta, context
-                , encoded_age,encoded_env_data
-                ):
-        trans = self.ptask_then_pshare(x, beta, context
-                , encoded_age,encoded_env_data)
-        return trans
-
-
-        #1
-        # return self.linear_true(trans)
-
-
-# class AdaLayerNorm(nn.Module):
-#     """Adaptive LayerNorm used in DiT-style blocks."""
-#     def __init__(self, hidden_dim: int, cond_dim: int):
-#         super().__init__()
-#         self.norm = nn.LayerNorm(hidden_dim, elementwise_affine=False)
-#         self.modulation = nn.Linear(cond_dim, 2 * hidden_dim)
-#     def forward(self, x: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
-#         shift, scale = self.modulation(cond).chunk(2, dim=-1)
-#         x = self.norm(x)
-#         return x * (1 + scale) + shift
-# class AdaLNDiTBlock(nn.Module):
-#     def __init__(self, hidden_dim: int, nhead: int, mlp_ratio: int, cond_dim: int, dropout: float = 0.0):
-#         super().__init__()
-#         self.adaln_attn = AdaLayerNorm(hidden_dim, cond_dim)
-#         self.attn = nn.MultiheadAttention(hidden_dim, nhead, dropout=dropout, batch_first=True)
-#         self.adaln_mlp = AdaLayerNorm(hidden_dim, cond_dim)
-#         self.mlp = nn.Sequential(
-#             nn.Linear(hidden_dim, hidden_dim * mlp_ratio),
-#             nn.GELU(),
-#             nn.Linear(hidden_dim * mlp_ratio, hidden_dim),
-#         )
-
-#     def forward(self, x: torch.Tensor, cond: torch.Tensor, attn_mask=None):
-#         h = self.adaln_attn(x, cond)
-#         attn_out, _ = self.attn(h, h, h, attn_mask=attn_mask)
-#         x = x + attn_out
-#         h = self.adaln_mlp(x, cond)
-#         x = x + self.mlp(h)
-#         return x
 # class TransformerConcatLinear(Module):
 #     def __init__(self, point_dim, context_dim, tf_layer, residual):
 #         super().__init__()
-#         self.residual = residual
-#         hidden_dim = 2 * context_dim
-#         self.pos_emb = PositionalEncoding(d_model=hidden_dim, dropout=0.1, max_len=24)
+#         self.residual = residual # False
+#         self.pos_emb = PositionalEncoding(d_model=2*context_dim, dropout=0.1, max_len=24)
+#         self.concat1_2 = ConcatSquashLinear(context_dim, 2 * context_dim, context_dim + 3)
+#         self.layer = nn.TransformerEncoderLayer(d_model=2*context_dim, nhead=4, dim_feedforward=4*context_dim)
+#         self.transformer_encoder = nn.TransformerEncoder(self.layer, num_layers=tf_layer)
+#         self.concat3 = ConcatSquashLinear(2*context_dim,context_dim,context_dim+3)
+#         self.concat4 = ConcatSquashLinear(context_dim,context_dim//2,context_dim+3)
+#         self.linear = ConcatSquashLinear(context_dim//2, point_dim, context_dim+3)
+#         self.concat5 = ConcatSquashLinear(point_dim, point_dim, point_dim)
+#         self.linear_true = Linear(128, point_dim)
 
-#         self.env_proj_traj = ConcatSquashLinear(2, 128, 32)
-#         self.env_proj_inten = ConcatSquashLinear(1, 64, 36)
-#         self.env_proj_wind = ConcatSquashLinear(1, 64, 20)
+#         self.concat_env_age_x_traj = ConcatSquashLinear(2, 128, 32)
+#         self.concat_env_age_x_inten = ConcatSquashLinear(1, 64, 36)
+#         self.concat_env_age_x_wind = ConcatSquashLinear(1, 64, 20)
 
-#         self.input_proj = nn.Linear(128 + 64 + 64, hidden_dim)
+#         self.concat1 = ConcatSquashLinear(point_dim, 2 * context_dim,
+#                                           context_dim + 3)  # context_dim:384?  #ctx_emb:torch.Size([B, 1, 387]) x:torch.Size([B, 4, 4])
+#         #_type1
+#         # self.concat_env_age_x_traj_type1 = ConcatSquashLinear(2, 2, 32)
+#         # self.concat_env_age_x_inten_type1 = ConcatSquashLinear(1, 1, 36)
+#         # self.concat_env_age_x_wind_type1 = ConcatSquashLinear(1, 1, 20)  # x的输入维度,输出的维度，ctx的输入维度
 
-#         # conditioning projection: time + context + env + age
-#         self.cond_proj = nn.Sequential(
-#             nn.Linear(context_dim + 3 + 4 + 32 + 32 + 16, hidden_dim),
-#             nn.GELU(),
-#             nn.Linear(hidden_dim, hidden_dim),
-#         )
+#         # self.concat1_type2 = ConcatSquashLinear(point_dim, 2 * context_dim, 347)
+#         # self.concat3_type2 = ConcatSquashLinear(2 * context_dim, context_dim, 347)
+#         # self.concat4_type2 = ConcatSquashLinear(context_dim, context_dim // 2, 347)
+#         # self.linear_type2 = ConcatSquashLinear(context_dim // 2, point_dim, 347)
 
-#         self.blocks = nn.ModuleList(
-#             [
-#                 AdaLNDiTBlock(hidden_dim, nhead=4, mlp_ratio=2, cond_dim=hidden_dim)
-#                 for _ in range(tf_layer)
-#             ]
-#         )
-#         self.final_norm = nn.LayerNorm(hidden_dim)
-#         self.output_proj = nn.Sequential(
-#             nn.Linear(hidden_dim, context_dim),
-#             nn.GELU(),
-#             nn.Linear(context_dim, point_dim),
-#         )
+#         #=======================================================
+#         # Missing key(s) in state_dict: ,
+#         #========================================================
+#     # self.net(c0 * x_0 + c1 * e_rand, beta=beta, context=context,
+#     #                            encoded_age = encoded_age)
 
-#     def _build_condition(self, beta, context, encoded_age, encoded_env_data):
-#         batch_size = beta.size(0)
-#         beta = beta.view(batch_size, 1, 1)
-#         context = context.view(batch_size, 1, -1)
-#         encoded_age = encoded_age.view(batch_size, 1, -1)
-#         env_traj = encoded_env_data[0].to(beta.device).view(batch_size, 1, -1)
-#         env_inten = encoded_env_data[1].to(beta.device).view(batch_size, 1, -1)
-#         env_wind = encoded_env_data[2].to(beta.device).view(batch_size, 1, -1)
-
-#         time_emb = torch.cat([beta, torch.sin(beta), torch.cos(beta)], dim=-1)
-#         cond = torch.cat([time_emb, context, encoded_age, env_traj / 100, env_inten / 100, env_wind / 100], dim=-1)
-#         cond = self.cond_proj(cond)
-#         return cond
-
-#     def forward(self, x, beta, context, encoded_age, encoded_env_data):
+#     def ptask_then_pshare(self, x, beta, context
+#                 , encoded_age,encoded_env_data):
 #         batch_size = x.size(0)
-#         cond = self._build_condition(beta, context, encoded_age, encoded_env_data)
+#         beta = beta.view(batch_size, 1, 1)  # (B, 1, 1) torch.Size([B, 1, 1])
+#         context = context.view(batch_size, 1, -1)  # (B, 1, F) torch.Size([B, 1, 256])--torch.Size([B, 1, 384])
 
+#         encoded_age = encoded_age.view(batch_size, 1, -1)  # (B,1,4)
 #         env_traj = encoded_env_data[0].to(x.device).view(batch_size, 1, -1)
 #         env_inten = encoded_env_data[1].to(x.device).view(batch_size, 1, -1)
 #         env_wind = encoded_env_data[2].to(x.device).view(batch_size, 1, -1)
 
-#         traj_feat = self.env_proj_traj(env_traj / 100, x[:, :, 0:2])
-#         inten_feat = self.env_proj_inten(torch.cat([env_inten / 100, encoded_age.view(batch_size, 1, -1)], dim=-1), x[:, :, 2:3])
-#         wind_feat = self.env_proj_wind(torch.cat([env_wind / 100, encoded_age.view(batch_size, 1, -1)], dim=-1), x[:, :, 3:4])
+#         # 轨迹
+#         ctx_emb_env_age_traj = env_traj
+#         ctx_emb_env_age_traj = ctx_emb_env_age_traj / 100
+#         # 强度
+#         ctx_emb_env_age_inten = torch.cat([env_inten, encoded_age], dim=-1)
+#         ctx_emb_env_age_inten = ctx_emb_env_age_inten / 100
+#         # 风速
+#         ctx_emb_env_age_wind = torch.cat([env_wind, encoded_age], dim=-1)  # (B, 1, 20)
+#         ctx_emb_env_age_wind = ctx_emb_env_age_wind / 100
+
+#         x_traj = self.concat_env_age_x_traj(ctx_emb_env_age_traj,
+#                                             x[:, :, 0:2])  # (B, 1, 84) (B,4,4)  输出torch.Size([256, 4, 256])
+#         x_inten = self.concat_env_age_x_inten(ctx_emb_env_age_inten, x[:, :, 2:3])
+#         x_wind = self.concat_env_age_x_wind(ctx_emb_env_age_wind, x[:, :, 3:4])
+#         x = torch.cat((x_traj, x_inten, x_wind), dim=2)
+
+#         time_emb = torch.cat([beta, torch.sin(beta), torch.cos(beta)], dim=-1)  # (B, 1, 3)
+#         ctx_emb = torch.cat([time_emb, context], dim=-1)  # (B, 1, F+3) torch.Size([B, 1, 259])
+
+#         x = self.concat1_2(ctx_emb, x)  # [B, 4, 512]
+#         # 【B,4,512】
+#         final_emb = x.permute(1, 0, 2)  # torch.Size([4, B, 512])
+#         final_emb = self.pos_emb(final_emb)  # torch.Size([4, B, 512])
+#         trans = self.transformer_encoder(final_emb).permute(1, 0, 2)  # torch.Size([B, 4, 512])
+#         trans = self.concat3(ctx_emb, trans)  # torch.Size([B, 4, 256])
+#         trans = self.concat4(ctx_emb, trans)  # torch.Size([B, 4, 128])
+#         trans = self.linear(ctx_emb, trans)  # torch.Size([B, 4, 4])  #直接从512缩小到4
+#         return trans
+#     def pshare_then_ptask(self, x, beta, context
+#                 , encoded_age,encoded_env_data):
+#         batch_size = x.size(0)
+#         beta = beta.view(batch_size, 1, 1)  # (B, 1, 1) torch.Size([B, 1, 1])
+#         context = context.view(batch_size, 1, -1)  # (B, 1, F) torch.Size([B, 1, 256])--torch.Size([B, 1, 384])
+
+#         encoded_age = encoded_age.view(batch_size, 1, -1)  # (B,1,4)
+#         env_traj = encoded_env_data[0].to(x.device).view(batch_size, 1, -1)
+#         env_inten = encoded_env_data[1].to(x.device).view(batch_size, 1, -1)
+#         env_wind = encoded_env_data[2].to(x.device).view(batch_size, 1, -1)
+
+#         # 轨迹
+#         ctx_emb_env_age_traj = env_traj
+#         ctx_emb_env_age_traj = ctx_emb_env_age_traj / 100
+#         # 强度
+#         ctx_emb_env_age_inten = torch.cat([env_inten, encoded_age], dim=-1)
+#         ctx_emb_env_age_inten = ctx_emb_env_age_inten / 100
+#         # 风速
+#         ctx_emb_env_age_wind = torch.cat([env_wind, encoded_age], dim=-1)  # (B, 1, 20)
+#         ctx_emb_env_age_wind = ctx_emb_env_age_wind / 100
+
+#         time_emb = torch.cat([beta, torch.sin(beta), torch.cos(beta)], dim=-1)  # (B, 1, 3)
+#         ctx_emb = torch.cat([time_emb, context], dim=-1)  # (B, 1, F+3) torch.Size([B, 1, 259])
+
+#         x = self.concat1(ctx_emb, x)  # [B, 4, 512]
+#         # 【B,4,512】
+#         final_emb = x.permute(1, 0, 2)  # torch.Size([4, B, 512])
+#         final_emb = self.pos_emb(final_emb)  # torch.Size([4, B, 512])
+#         trans = self.transformer_encoder(final_emb).permute(1, 0, 2)  # torch.Size([B, 4, 512])
+#         trans = self.concat3(ctx_emb, trans)  # torch.Size([B, 4, 256])
+#         trans = self.concat4(ctx_emb, trans)  # torch.Size([B, 4, 128])
+#         trans = self.linear(ctx_emb, trans)  # torch.Size([B, 4, 4])  #
+
+#         x_traj = self.concat_env_age_x_traj_type1(ctx_emb_env_age_traj,
+#                                             trans[:, :, 0:2])  # (B, 1, 84) (B,4,4)  输出torch.Size([256, 4, 256])
+#         x_inten = self.concat_env_age_x_inten_type1(ctx_emb_env_age_inten, trans[:, :, 2:3])
+#         x_wind = self.concat_env_age_x_wind_type1(ctx_emb_env_age_wind, trans[:, :, 3:4])
+#         x = torch.cat((x_traj, x_inten, x_wind), dim=2)
+#         return x
+#     def pshare_and_ptask(self, x, beta, context
+#                 , encoded_age,encoded_env_data):
+#         batch_size = x.size(0)
+#         beta = beta.view(batch_size, 1, 1)  # (B, 1, 1) torch.Size([B, 1, 1])
+#         context = context.view(batch_size, 1, -1)  # (B, 1, F) torch.Size([B, 1, 256])--torch.Size([B, 1, 384])
+
+#         encoded_age = encoded_age.view(batch_size, 1, -1)  # (B,1,4)
+#         env_traj = encoded_env_data[0].to(x.device).view(batch_size, 1, -1)
+#         env_inten = encoded_env_data[1].to(x.device).view(batch_size, 1, -1)
+#         env_wind = encoded_env_data[2].to(x.device).view(batch_size, 1, -1)
+
+#         # 轨迹
+#         ctx_emb_env_age_traj = env_traj
+#         ctx_emb_env_age_traj = ctx_emb_env_age_traj / 100
+#         # 强度
+#         ctx_emb_env_age_inten = torch.cat([env_inten, encoded_age], dim=-1)
+#         ctx_emb_env_age_inten = ctx_emb_env_age_inten / 100
+#         # 风速
+#         ctx_emb_env_age_wind = torch.cat([env_wind, encoded_age], dim=-1)  # (B, 1, 20)
+#         ctx_emb_env_age_wind = ctx_emb_env_age_wind / 100
+
+#         p_task = torch.cat((ctx_emb_env_age_traj, ctx_emb_env_age_inten, ctx_emb_env_age_wind), dim=2)
+
+#         time_emb = torch.cat([beta, torch.sin(beta), torch.cos(beta)], dim=-1)  # (B, 1, 3)
+#         ctx_emb = torch.cat([time_emb, context, p_task], dim=-1)  # (B, 1, F+3) torch.Size([B, 1, 347])
+
+#         x = self.concat1_type2(ctx_emb, x)  # [B, 4, 512]
+#         # 【B,4,512】
+#         final_emb = x.permute(1, 0, 2)  # torch.Size([4, B, 512])
+#         final_emb = self.pos_emb(final_emb)  # torch.Size([4, B, 512])
+#         trans = self.transformer_encoder(final_emb).permute(1, 0, 2)  # torch.Size([B, 4, 512])
+#         trans = self.concat3_type2(ctx_emb, trans)  # torch.Size([B, 4, 256])
+#         trans = self.concat4_type2(ctx_emb, trans)  # torch.Size([B, 4, 128])
+#         trans = self.linear_type2(ctx_emb, trans)  # torch.Size([B, 4, 4])  #直接从512缩小到4
+#         return trans
+#     def forward(self, x, beta, context
+#                 , encoded_age,encoded_env_data
+#                 ):
+#         trans = self.ptask_then_pshare(x, beta, context
+#                 , encoded_age,encoded_env_data)
+#         return trans
+
+
+#         #1
+#         # return self.linear_true(trans)
+
+
+class AdaLayerNorm(nn.Module):
+    """Adaptive LayerNorm used in DiT-style blocks."""
+    def __init__(self, hidden_dim: int, cond_dim: int):
+        super().__init__()
+        self.norm = nn.LayerNorm(hidden_dim, elementwise_affine=False)
+        self.modulation = nn.Linear(cond_dim, 2 * hidden_dim)
+    def forward(self, x: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
+        shift, scale = self.modulation(cond).chunk(2, dim=-1)
+        x = self.norm(x)
+        return x * (1 + scale) + shift
+class AdaLNDiTBlock(nn.Module):
+    def __init__(self, hidden_dim: int, nhead: int, mlp_ratio: int, cond_dim: int, dropout: float = 0.0):
+        super().__init__()
+        self.adaln_attn = AdaLayerNorm(hidden_dim, cond_dim)
+        self.attn = nn.MultiheadAttention(hidden_dim, nhead, dropout=dropout, batch_first=True)
+        self.adaln_mlp = AdaLayerNorm(hidden_dim, cond_dim)
+        self.mlp = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim * mlp_ratio),
+            nn.GELU(),
+            nn.Linear(hidden_dim * mlp_ratio, hidden_dim),
+        )
+
+    def forward(self, x: torch.Tensor, cond: torch.Tensor, attn_mask=None):
+        h = self.adaln_attn(x, cond)
+        attn_out, _ = self.attn(h, h, h, attn_mask=attn_mask)
+        x = x + attn_out
+        h = self.adaln_mlp(x, cond)
+        x = x + self.mlp(h)
+        return x
+class TransformerConcatLinear(Module):
+    def __init__(self, point_dim, context_dim, tf_layer, residual):
+        super().__init__()
+        self.residual = residual
+        hidden_dim = 2 * context_dim
+        self.pos_emb = PositionalEncoding(d_model=hidden_dim, dropout=0.1, max_len=24)
+
+        self.env_proj_traj = ConcatSquashLinear(2, 128, 32)
+        self.env_proj_inten = ConcatSquashLinear(1, 64, 36)
+        self.env_proj_wind = ConcatSquashLinear(1, 64, 20)
+
+        self.input_proj = nn.Linear(128 + 64 + 64, hidden_dim)
+
+        # conditioning projection: time + context + env + age
+        self.cond_proj = nn.Sequential(
+            nn.Linear(context_dim + 3 + 4 + 32 + 32 + 16, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+
+        self.blocks = nn.ModuleList(
+            [
+                AdaLNDiTBlock(hidden_dim, nhead=4, mlp_ratio=2, cond_dim=hidden_dim)
+                for _ in range(tf_layer)
+            ]
+        )
+        self.final_norm = nn.LayerNorm(hidden_dim)
+        self.output_proj = nn.Sequential(
+            nn.Linear(hidden_dim, context_dim),
+            nn.GELU(),
+            nn.Linear(context_dim, point_dim),
+        )
+
+    def _build_condition(self, beta, context, encoded_age, encoded_env_data):
+        batch_size = beta.size(0)
+        beta = beta.view(batch_size, 1, 1)
+        context = context.view(batch_size, 1, -1)
+        encoded_age = encoded_age.view(batch_size, 1, -1)
+        env_traj = encoded_env_data[0].to(beta.device).view(batch_size, 1, -1)
+        env_inten = encoded_env_data[1].to(beta.device).view(batch_size, 1, -1)
+        env_wind = encoded_env_data[2].to(beta.device).view(batch_size, 1, -1)
+
+        time_emb = torch.cat([beta, torch.sin(beta), torch.cos(beta)], dim=-1)
+        cond = torch.cat([time_emb, context, encoded_age, env_traj / 100, env_inten / 100, env_wind / 100], dim=-1)
+        cond = self.cond_proj(cond)
+        return cond
+
+    def forward(self, x, beta, context, encoded_age, encoded_env_data):
+        batch_size = x.size(0)
+        cond = self._build_condition(beta, context, encoded_age, encoded_env_data)
+
+        env_traj = encoded_env_data[0].to(x.device).view(batch_size, 1, -1)
+        env_inten = encoded_env_data[1].to(x.device).view(batch_size, 1, -1)
+        env_wind = encoded_env_data[2].to(x.device).view(batch_size, 1, -1)
+
+        traj_feat = self.env_proj_traj(env_traj / 100, x[:, :, 0:2])
+        inten_feat = self.env_proj_inten(torch.cat([env_inten / 100, encoded_age.view(batch_size, 1, -1)], dim=-1), x[:, :, 2:3])
+        wind_feat = self.env_proj_wind(torch.cat([env_wind / 100, encoded_age.view(batch_size, 1, -1)], dim=-1), x[:, :, 3:4])
         
-#         token = torch.cat((traj_feat, inten_feat, wind_feat), dim=2)
-#         token = self.input_proj(token)
-#         token = token.permute(1, 0, 2)  # (T, B, C)
-#         token = self.pos_emb(token).permute(1, 0, 2)
+        token = torch.cat((traj_feat, inten_feat, wind_feat), dim=2)
+        token = self.input_proj(token)
+        token = token.permute(1, 0, 2)  # (T, B, C)
+        token = self.pos_emb(token).permute(1, 0, 2)
 
-#         for block in self.blocks:
-#             # token = block(token, cond.squeeze(1))
-#             # Keep the condition tensor 3D so it can broadcast across the sequence
-#             # dimension inside AdaLayerNorm. Squeezing removed the time axis and
-#             # led to shape mismatches when applying the adaptive shift/scale.
-#             token = block(token, cond)
+        for block in self.blocks:
+            # token = block(token, cond.squeeze(1))
+            # Keep the condition tensor 3D so it can broadcast across the sequence
+            # dimension inside AdaLayerNorm. Squeezing removed the time axis and
+            # led to shape mismatches when applying the adaptive shift/scale.
+            token = block(token, cond)
 
-#         token = self.final_norm(token)
-#         out = self.output_proj(token)
-#         if self.residual:
-#             return x + out
-#         return out
+        token = self.final_norm(token)
+        out = self.output_proj(token)
+        if self.residual:
+            return x + out
+        return out
 
-# # 1125
+# 1125
 
 
 class TransformerLinear(Module):
