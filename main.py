@@ -42,7 +42,7 @@ def main():
 
     for k, v in vars(args).items():
        config[k] = v
-    config["exp_name"] = 'WP_GRU_ConvNeXt_AdaLN_DiT_loss_1203'
+    config["exp_name"] = 'WP_GRU_ConvNeXt_AdaLN_DiT_loss_1125'
     # config["exp_name"] = 'WP_epoch160'
 
     config["train_dataset"] = args.train_dataset
