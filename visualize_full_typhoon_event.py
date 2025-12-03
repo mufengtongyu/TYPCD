@@ -20,6 +20,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import imageio
 
 from dataset.preprocessing import get_timesteps_data
 from evaluation.trajectory_utils import prediction_output_to_trajectories
@@ -68,6 +69,36 @@ def parse_args() -> argparse.Namespace:
         "--horizon-output-dir",
         default="fig/typhoon_event_horizons",
         help="Directory to save per-horizon track visualizations",
+    )
+    parser.add_argument(
+        "--event-gif",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Generate a GIF from per-frame typhoon_event outputs (enabled by default). "
+            "Use --no-event-gif to skip."
+        ),
+    )
+    parser.add_argument(
+        "--event-gif-interval",
+        type=float,
+        default=0.5,
+        help="Frame interval (seconds) for the typhoon_event GIF",
+    )
+    parser.add_argument(
+        "--horizon-gif",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Generate a GIF from typhoon_event_horizons outputs (enabled by default). "
+            "Use --no-horizon-gif to skip."
+        ),
+    )
+    parser.add_argument(
+        "--horizon-gif-interval",
+        type=float,
+        default=0.5,
+        help="Frame interval (seconds) for the typhoon_event_horizons GIF",
     )
     parser.add_argument(
         "--horizon-reduction",
@@ -364,6 +395,25 @@ def _prepare_tracks(
     return history_track_deg, predicted_tracks_deg
 
 
+def _save_gif(image_paths: List[str], gif_path: str, duration: float) -> bool:
+    """Create a GIF from a list of image paths if any images are available.
+
+    Returns True if the GIF was created; False if skipped because no images were found.
+    """
+
+    if not image_paths:
+        print(f"Skipping GIF creation for '{gif_path}': no input images found.")
+        return False
+
+    os.makedirs(os.path.dirname(gif_path) or ".", exist_ok=True)
+    frames = [imageio.imread(path) for path in image_paths]
+    imageio.mimsave(gif_path, frames, duration=duration)
+    print(
+        f"Saved GIF to '{gif_path}' with {len(frames)} frame(s) at {duration}s per frame."
+    )
+    return True
+
+
 def main() -> None:
     args = parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -393,6 +443,16 @@ def main() -> None:
         args.zoom_output_dir,
     )
 
+    event_gif_created = False
+    if args.event_gif:
+        frame_paths = sorted(
+            os.path.join(args.output_dir, fname)
+            for fname in os.listdir(args.output_dir)
+            if fname.lower().endswith(".png")
+        )
+        event_gif_path = os.path.join(args.output_dir, f"{scene_label}.gif")
+        event_gif_created = _save_gif(frame_paths, event_gif_path, args.event_gif_interval)
+
     full_track_raw = _get_full_track(target_node)
     history_track_deg, predicted_tracks_deg = _prepare_tracks(frame_predictions, full_track_raw, args.horizon_reduction)
 
@@ -406,6 +466,7 @@ def main() -> None:
 
     horizon_hours = [6, 12, 18, 24]
     os.makedirs(args.horizon_output_dir, exist_ok=True)
+    horizon_outputs: List[str] = []
     for idx, hours in enumerate(horizon_hours[: len(predicted_tracks_deg)]):
         horizon_output = os.path.join(
             args.horizon_output_dir, f"{scene_label}_{hours}h_track.png"
@@ -419,6 +480,14 @@ def main() -> None:
                 a, b, c, d, "/mnt/e/data/HYP_LR_SR_OB_DR/HYP_LR_SR_OB_DR.tif"
             ),
         )
+        horizon_outputs.append(horizon_output)
+
+    horizon_gif_created = False
+    if args.horizon_gif:
+        horizon_gif_path = os.path.join(args.horizon_output_dir, f"{scene_label}_horizons.gif")
+        horizon_gif_created = _save_gif(
+            sorted(horizon_outputs), horizon_gif_path, args.horizon_gif_interval
+        )
 
     print(
         f"Saved {len(frame_predictions)} frame(s) for scene '{scene_label}' "
@@ -428,6 +497,25 @@ def main() -> None:
         f"Saved full-event tracks to '{args.summary_output}' and horizon plots to "
         f"'{args.horizon_output_dir}'."
     )
+    if args.event_gif:
+        if not event_gif_created:
+            print("Event GIF generation was requested but no frames were available to combine.")
+    else:
+        print(
+            "GIF creation for per-frame outputs is disabled because --no-event-gif was used. "
+            "This is enabled by default; omit the flag to generate a typhoon_event GIF."
+        )
+
+    if args.horizon_gif:
+        if not horizon_gif_created:
+            print(
+                "Horizon GIF generation was requested but no per-horizon images were found."
+            )
+    else:
+        print(
+            "GIF creation for horizon summaries is disabled because --no-horizon-gif was used. "
+            "This is enabled by default; omit the flag to generate a typhoon_event_horizons GIF."
+        )
 
 
 if __name__ == "__main__":
