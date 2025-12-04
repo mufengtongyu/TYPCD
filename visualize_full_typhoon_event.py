@@ -20,7 +20,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import imageio
+import imageio.v2
 
 from dataset.preprocessing import get_timesteps_data
 from evaluation.trajectory_utils import prediction_output_to_trajectories
@@ -82,7 +82,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--event-gif-interval",
         type=float,
-        default=3,
+        default=0.5,
         help="Frame interval (seconds) for the typhoon_event GIF",
     )
     parser.add_argument(
@@ -97,7 +97,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--horizon-gif-interval",
         type=float,
-        default=5,
+        default=0.5,
         help="Frame interval (seconds) for the typhoon_event_horizons GIF",
     )
     parser.add_argument(
@@ -109,7 +109,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--scene-index",
         type=int,
-        default=0,
+        default=24,
         help="Index of the evaluation scene to visualize",
     )
     parser.add_argument(
@@ -414,8 +414,12 @@ def _save_gif(image_paths: List[str], gif_path: str, duration: float) -> bool:
         return False
 
     os.makedirs(os.path.dirname(gif_path) or ".", exist_ok=True)
-    frames = [imageio.imread(path) for path in image_paths]
-    imageio.mimsave(gif_path, frames, duration=duration)
+    frames = [imageio.v2.imread(path) for path in image_paths]
+
+    # Pillow expects GIF durations in milliseconds; convert from seconds while guarding against
+    # zero-duration frames that would result in effectively instant playback.
+    frame_duration_ms = max(int(duration * 1000), 1)
+    imageio.v2.mimsave(gif_path, frames, duration=frame_duration_ms)
     print(
         f"Saved GIF to '{gif_path}' with {len(frames)} frame(s) at {duration}s per frame."
     )
