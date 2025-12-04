@@ -81,43 +81,27 @@ class DiffusionTraj(Module):
         # Wt = [1, 1, 1, 1, 1, 1, 1, 1]
 
         # 1125
-        # time-dependent weights encourage early timesteps while keeping interpretability
+        # time-dependent weights encourage early timesteps while keeping interpretability-效果好像不怎么样/待测试
         t_tensor = torch.tensor(t, device=x_0.device, dtype=torch.float32).view(batch_size, 1, 1)
         time_weights = 1.0 + t_tensor / float(self.var_sched.num_steps)
 
-        # first_add = 1.3
-        # if (T == 4):
-        #     Wt = [first_add, 1, 1, 1]
-        # elif (T == 3):
-        #     Wt = [first_add, 1, 1]
-        # elif (T == 2):
-        #     Wt = [first_add, 1]
-        # elif (T == 1):
-        #     Wt = [first_add]
+        first_add = 1.3
+        if (T == 4):
+            Wt = [first_add, 1, 1, 1]
+        elif (T == 3):
+            Wt = [first_add, 1, 1]
+        elif (T == 2):
+            Wt = [first_add, 1]
+        elif (T == 1):
+            Wt = [first_add]
 
-        # physical weights make dimension importance explicit: traj(x/y), intensity, wind
-        physical_weights = torch.tensor([1.0, 1.0, 1.3, 1.1], device=x_0.device).view(1, 1, point_dim)
+        loss = 0
+        for i in range(e_theta.size(1)): #T
+            loss_i = Wt[i]*F.mse_loss(e_theta[:,i,:].view(-1, point_dim), e_rand[:,i,:].view(-1, point_dim), reduction='mean')
+            loss+=loss_i
+        loss = loss/e_theta.size(1)
 
-        # loss = 0
-        # for i in range(e_theta.size(1)): #T
-        #     loss_i = Wt[i]*F.mse_loss(e_theta[:,i,:].view(-1, point_dim), e_rand[:,i,:].view(-1, point_dim), reduction='mean')
-        #     loss+=loss_i
-        # loss = loss/e_theta.size(1)
-
-        squared_error = (e_theta - e_rand) ** 2
-        weighted_error = squared_error * physical_weights
-        mse_per_step = weighted_error.mean(dim=2)  # (B, T)
-        weighted_mse = (mse_per_step * time_weights.squeeze(-1)).mean(dim=1)
-        loss = weighted_mse.mean()
-
-        # return loss # 是sum? 区分时刻
-        # cache components for interpretability/monitoring
-        self.last_loss_components = {
-            "time_weights": time_weights.detach().mean(dim=0).view(-1).cpu(),
-            "physical_weights": physical_weights.view(-1).detach().cpu(),
-        }
-
-        return loss # weighted by time step and physical meaning
+        return loss # 是sum? 区分时刻
     # 1125
 
 

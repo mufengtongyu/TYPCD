@@ -4,9 +4,9 @@
 lr: 0.0001
 # dataset
 # 这个是数量少的根据MGTCF来的，自己跑的版本，但是为什么性能会弱？因为样本多了取平均之后效果就好了？
-data_dir: /home/littlered/Documents/TC-Diffuser/TC-Diffuser/processed_data_noise_traj_inten_wind_gph_env
+# data_dir: /home/littlered/Documents/TC-Diffuser/TC-Diffuser/processed_data_noise_traj_inten_wind_gph_env
 # 这个是TC-Diffuser给的版本
-# data_dir: /mnt/e/data/TC-Diffusion/processed_data_noise_traj_inten_wind_gph_env
+data_dir: /mnt/e/data/TC-Diffusion/processed_data_noise_traj_inten_wind_gph_env
   # the path with the directory with XXX.pkl
 # Training Prarmeters:
 diffnet: TransformerConcatLinear #TransformerConcatLinear
