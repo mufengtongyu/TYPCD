@@ -1,7 +1,11 @@
+from __future__ import annotations
+
 import argparse
+import importlib
 import os
+import sys
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import dill
 
@@ -17,7 +21,6 @@ from easydict import EasyDict
 
 from dataset.preprocessing import get_timesteps_data
 from evaluation.trajectory_utils import prediction_output_to_trajectories
-from models.autoencoder import AutoEncoder
 from models.trajectron import Trajectron
 from utils.model_registrar import ModelRegistrar
 from utils.trajectron_hypers import get_traj_hypers
@@ -72,7 +75,13 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_config(config_path: str, checkpoint_path: str) -> EasyDict:
+def load_config(
+    config_path: str,
+    checkpoint_path: str,
+    *,
+    exp_name_override: Optional[str] = None,
+    test_epochs: Optional[List[int]] = None,
+) -> EasyDict:
     with open(config_path, encoding="utf-8") as f:
         config = yaml.safe_load(f)
     config = EasyDict(config)
@@ -80,21 +89,46 @@ def load_config(config_path: str, checkpoint_path: str) -> EasyDict:
     config.eval_dataset = config.get("eval_dataset", config.get("train_dataset", "WP"))
     config.train_dataset = config.get("train_dataset", "WP")
     checkpoint_name = Path(checkpoint_path)
-    config.exp_name = checkpoint_name.parent.name
+    config.exp_name = exp_name_override or checkpoint_name.parent.name
     if checkpoint_name.stem.startswith(f"{config.train_dataset}_epoch"):
         try:
             config.eval_at = int(checkpoint_name.stem.split("_epoch")[-1])
         except ValueError:
             pass
+    if test_epochs is not None:
+        config.test = list(test_epochs)
+    elif "test" not in config and config.get("eval_at") is not None:
+        config.test = [config.eval_at]
     return config
 
 
-def build_inference_components(config: EasyDict, checkpoint_path: str, device: torch.device):
+def _load_autoencoder(diffusion_module_path: str):
+    """Load AutoEncoder with the requested diffusion implementation."""
+
+    needs_custom_diffusion = diffusion_module_path != "models.diffusion"
+    if needs_custom_diffusion:
+        diffusion_module = importlib.import_module(diffusion_module_path)
+        sys.modules["models.diffusion"] = diffusion_module
+        autoencoder_module = importlib.reload(importlib.import_module("models.autoencoder"))
+    else:
+        autoencoder_module = importlib.import_module("models.autoencoder")
+    return autoencoder_module.AutoEncoder
+
+
+def build_inference_components(
+    config: EasyDict,
+    checkpoint_path: str,
+    device: torch.device,
+    diffusion_module_path: str = "models.diffusion",
+    *,
+    strict_weights: bool = True,
+):
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(
             f"Checkpoint '{checkpoint_path}' not found. Please download the weights before running the script."
         )
 
+    AutoEncoder = _load_autoencoder(diffusion_module_path)
     hyperparams = get_traj_hypers()
     hyperparams["enc_rnn_dim_edge"] = config.encoder_dim // 2
     hyperparams["enc_rnn_dim_edge_influence"] = config.encoder_dim // 2
@@ -117,7 +151,15 @@ def build_inference_components(config: EasyDict, checkpoint_path: str, device: t
     encoder.set_annealing_params()
 
     model = AutoEncoder(config, encoder=encoder).to(device)
-    model.load_state_dict(checkpoint["ddpm"])
+    load_result = model.load_state_dict(checkpoint["ddpm"], strict=strict_weights)
+    if not strict_weights:
+        missing = list(load_result.missing_keys)
+        unexpected = list(load_result.unexpected_keys)
+        if missing or unexpected:
+            print(
+                "Loaded checkpoint with relaxed strictness."
+                f" Missing keys: {missing}. Unexpected keys: {unexpected}."
+            )
     model.eval()
     return model, eval_env, hyperparams
 
@@ -338,108 +380,98 @@ def _plot_tracks_on_axis(
     history_deg: np.ndarray,
     future_deg: np.ndarray,
     plot_kwargs: Dict,
+    *,
+    color: str = "green",
+    model_label: str = "TYPCD",
+    show_members: bool = True,
+    draw_history: bool = True,
+    show_cone: bool = True,
 ):
     current_point = history_deg[-1]
 
     cone_points = np.vstack([current_point, predicted_deg.reshape(-1, 2)])
     cone_hull = _convex_hull(cone_points)
-    if len(cone_hull) >= 3:
+    if show_cone and len(cone_hull) >= 3:
+        ax.plot([], [], label=f"{model_label} probability cone", **plot_kwargs)
         ax.fill(
             cone_hull[:, 0],
             cone_hull[:, 1],
-            color="limegreen",
-            alpha=0.5,
+            color=color,
+            alpha=0.35,
             zorder=1,
-            label="Probability cone",
             **plot_kwargs,
         )
 
-    ax.plot(
-        history_deg[:, 0],
-        history_deg[:, 1],
-        "o-",
-        color="black",
-        markerfacecolor="black",
-        markeredgecolor="black",
-        markersize=2,
-        label="History",
-        zorder=3,
-        **plot_kwargs,
-    )
-    future_with_current = np.vstack([current_point, future_deg])
-
-    ax.plot(
-        future_with_current[:, 0],
-        future_with_current[:, 1],
-        "o-",
-        color="red",
-        markerfacecolor="red",
-        markeredgecolor="red",
-        markersize=2,
-        label="Future ground truth",
-        zorder=3,
-        **plot_kwargs,
-    )
-    ax.plot(
-        current_point[0],
-        current_point[1],
-        "o",
-        color="blue",
-        label="Current position",
-        markersize=3,
-        zorder=8,
-        **plot_kwargs,
-    )
-
-    for idx, traj in enumerate(predicted_deg):
-        predicted_with_current = np.vstack([current_point, traj])
+    if draw_history:
         ax.plot(
-            predicted_with_current[:, 0],
-            predicted_with_current[:, 1],
-            "o:",
-            color="green",
-            markerfacecolor="green",
-            markeredgecolor="green",
-            markersize=1,
-            linewidth=1,
-            label="Predicted trajectories" if idx == 0 else None,
-            zorder=6,
+            history_deg[:, 0],
+            history_deg[:, 1],
+            "o-",
+            color="black",
+            markerfacecolor="black",
+            markeredgecolor="black",
+            markersize=2,
+            label="History",
+            zorder=3,
             **plot_kwargs,
         )
+        future_with_current = np.vstack([current_point, future_deg])
+        
+        ax.plot(
+            future_with_current[:, 0],
+            future_with_current[:, 1],
+            "o-",
+            color="red",
+            markerfacecolor="red",
+            markeredgecolor="red",
+            markersize=2,
+            label="Future ground truth",
+            zorder=3,
+            **plot_kwargs,
+        )
+        ax.plot(
+            current_point[0],
+            current_point[1],
+            "o",
+            color="blue",
+            label="Current position",
+            markersize=3,
+            zorder=8,
+            **plot_kwargs,
+        )
+
+    if show_members:
+        for idx, traj in enumerate(predicted_deg):
+            predicted_with_current = np.vstack([current_point, traj])
+            ax.plot(
+                predicted_with_current[:, 0],
+                predicted_with_current[:, 1],
+                "o:",
+                color=color,
+                markerfacecolor=color,
+                markeredgecolor=color,
+                markersize=1,
+                linewidth=1,
+                label=(f"{model_label} predicted trajectories" if idx == 0 else None),
+                zorder=6,
+                **plot_kwargs,
+            )
+    
     
     ensemble_mean = np.nanmean(predicted_deg, axis=0)
     ensemble_with_current = np.vstack([current_point, ensemble_mean])
     ax.plot(
         ensemble_with_current[:, 0],
         ensemble_with_current[:, 1],
-        "o-.",
-        color="green",
-        markerfacecolor="green",
-        markeredgecolor="green",
+        color=color,
+        markerfacecolor=color,
+        markeredgecolor=color,
         markersize=2,
         linewidth=1.5,
-        label="Ensemble mean trajectory",
+        label=f"{model_label} ensemble mean trajectory",
         zorder=7,
         **plot_kwargs,
     )
-
-    ensemble_mean = np.nanmean(predicted_deg, axis=0)
-    ensemble_with_current = np.vstack([current_point, ensemble_mean])
-    ax.plot(
-        ensemble_with_current[:, 0],
-        ensemble_with_current[:, 1],
-        "o-.",
-        color="green",
-        markerfacecolor="green",
-        markeredgecolor="green",
-        markersize=5,
-        linewidth=1.5,
-        label="Ensemble mean trajectory",
-        zorder=7,
-        **plot_kwargs,
-    )
-
-    ax.legend(loc="best")
 
 
 def plot_paths(
@@ -447,7 +479,11 @@ def plot_paths(
     history: np.ndarray,
     future: np.ndarray,
     output_path: str,
-    zoom_output_path: str,
+    zoom_output_path: Optional[str] = None,
+    *,
+    compare_prediction: Optional[np.ndarray] = None,
+    compare_label: str = "TC-Diffuser",
+    compare_color: str = "darkorange",
 ):
     raster_path = "/mnt/e/data/HYP_LR_SR_OB_DR/HYP_LR_SR_OB_DR.tif"
     predicted_deg = denormalize_positions(np.asarray(predicted_trajs))
@@ -459,6 +495,20 @@ def plot_paths(
         100, 180, 0, 50, raster_path
     )
     _plot_tracks_on_axis(ax, predicted_deg, history_deg, future_deg, plot_kwargs)
+    if compare_prediction is not None:
+        compare_deg = denormalize_positions(np.asarray(compare_prediction))
+        _plot_tracks_on_axis(
+            ax,
+            compare_deg,
+            history_deg,
+            future_deg,
+            plot_kwargs,
+            color=compare_color,
+            model_label=compare_label,
+            show_members=False,
+            draw_history=False,
+        )
+    ax.legend(loc="best")
 
     output_dir = os.path.dirname(output_path)
     if output_dir:
@@ -494,11 +544,13 @@ def plot_paths(
         lon_min_zoom, lon_max_zoom, lat_min_zoom, lat_max_zoom, raster_path, figsize=(12, 9)
     )
     _plot_tracks_on_axis(ax_zoom, predicted_deg, history_deg, future_deg, plot_kwargs_zoom)
-    zoom_dir = os.path.dirname(zoom_output_path)
+    # If no zoom path is supplied, mirror the primary output name.
+    zoom_path = zoom_output_path or output_path.replace(".png", "_zoom.png")
+    zoom_dir = os.path.dirname(zoom_path)
     if zoom_dir:
         os.makedirs(zoom_dir, exist_ok=True)
     fig_zoom.tight_layout()
-    fig_zoom.savefig(zoom_output_path, dpi=300, bbox_inches="tight", pad_inches=0)
+    fig_zoom.savefig(zoom_path, dpi=300, bbox_inches="tight", pad_inches=0)
     plt.close(fig_zoom)
 
 

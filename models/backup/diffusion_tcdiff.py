@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from torch.nn import Module, Parameter, ModuleList
 import numpy as np
 import torch.nn as nn
-from .common import *
+from ..common import *
 import pdb
 
 class VarianceSchedule(Module):

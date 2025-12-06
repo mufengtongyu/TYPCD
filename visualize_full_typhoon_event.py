@@ -46,6 +46,18 @@ def parse_args() -> argparse.Namespace:
         help="Config file used to build the model",
     )
     parser.add_argument(
+        "--exp-name",
+        default="WP_GRU_ConvNeXt_AdaLN_DiT_loss_1125",
+        help="Experiment name for the primary TYPCD model",
+    )
+    parser.add_argument(
+        "--test-epochs",
+        type=int,
+        nargs="+",
+        default=[190],
+        help="Epoch indices to evaluate for the primary TYPCD model",
+    )
+    parser.add_argument(
         "--checkpoint",
         default="experiments/WP_GRU_ConvNeXt_AdaLN_DiT_loss_1125/WP_epoch190.pt",
         help="Checkpoint containing the trained weights",
@@ -73,7 +85,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--event-gif",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help=(
             "Generate a GIF from per-frame typhoon_event outputs (enabled by default). "
             "Use --no-event-gif to skip."
@@ -82,13 +94,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--event-gif-interval",
         type=float,
-        default=0.5,
+        default=1.5,
         help="Frame interval (seconds) for the typhoon_event GIF",
     )
     parser.add_argument(
         "--horizon-gif",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help=(
             "Generate a GIF from typhoon_event_horizons outputs (enabled by default). "
             "Use --no-horizon-gif to skip."
@@ -97,7 +109,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--horizon-gif-interval",
         type=float,
-        default=0.5,
+        default=2,
         help="Frame interval (seconds) for the typhoon_event_horizons GIF",
     )
     parser.add_argument(
@@ -107,9 +119,37 @@ def parse_args() -> argparse.Namespace:
         help="How to aggregate ensemble errors when drawing per-horizon summaries.",
     )
     parser.add_argument(
+        "--compare",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable overlaying TC-Diffuser results for typhoon_event and typhoon_event_horizons plots.",
+    )
+    parser.add_argument(
+        "--compare-config",
+        default="configs/baseline.yaml",
+        help="Config file for the comparison TC-Diffuser model",
+    )
+    parser.add_argument(
+        "--compare-exp-name",
+        default="WP_epoch160",
+        help="Experiment name for the comparison TC-Diffuser model",
+    )
+    parser.add_argument(
+        "--compare-test-epochs",
+        type=int,
+        nargs="+",
+        default=[160],
+        help="Epoch indices to evaluate for the comparison TC-Diffuser model",
+    )
+    parser.add_argument(
+        "--compare-checkpoint",
+        default="experiments/WP_epoch160/WP_epoch160.pt",
+        help="Checkpoint containing the TC-Diffuser trained weights",
+    )
+    parser.add_argument(
         "--scene-index",
         type=int,
-        default=24,
+        default=1,
         help="Index of the evaluation scene to visualize",
     )
     parser.add_argument(
@@ -220,6 +260,10 @@ def _plot_track_pair(
     output_path: str,
     title: str,
     axes_builder=_get_axes_with_basemap,
+    *,
+    compare_track: Optional[np.ndarray] = None,
+    compare_label: str = "TC-Diffuser",
+    compare_color: str = "darkorange",
 ) -> None:
     fig, ax, plot_kwargs = axes_builder(100, 180, 0, 50)
     ax.plot(
@@ -239,9 +283,20 @@ def _plot_track_pair(
         color="green",
         markersize=3,
         linewidth=1.2,
-        label="Predicted track",
+        label="TYPCD predicted track",
         **plot_kwargs,
     )
+    if compare_track is not None and len(compare_track) > 0:
+        ax.plot(
+            compare_track[:, 0],
+            compare_track[:, 1],
+            "o--",
+            color=compare_color,
+            markersize=3,
+            linewidth=1.2,
+            label=f"{compare_label} predicted track",
+            **plot_kwargs,
+        )
     ax.set_title(title)
     ax.legend(loc="best")
     output_dir = os.path.dirname(output_path)
@@ -357,15 +412,36 @@ def save_frame_visualizations(
     scene_label: str,
     output_dir: str,
     zoom_output_dir: str,
+    *,
+    compare_predictions: Optional[List[FramePrediction]] = None,
+    compare_label: str = "TC-Diffuser",
 ) -> None:
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(zoom_output_dir, exist_ok=True)
+
+    compare_lookup: Dict[int, FramePrediction] = {}
+    if compare_predictions:
+        compare_lookup = {
+            ts: (predicted, history_raw, future_raw)
+            for ts, predicted, history_raw, future_raw in compare_predictions
+        }
 
     for ts, predicted_trajs, history_raw, future_raw in frame_predictions:
         base_name = f"{scene_label}_t{ts:04d}"
         output_path = os.path.join(output_dir, f"{base_name}.png")
         zoom_output_path = os.path.join(zoom_output_dir, f"{base_name}.png")
-        plot_paths(predicted_trajs, history_raw, future_raw, output_path, zoom_output_path)
+        compare_trajs = None
+        if compare_lookup and ts in compare_lookup:
+            compare_trajs = compare_lookup[ts][0]
+        plot_paths(
+            predicted_trajs,
+            history_raw,
+            future_raw,
+            output_path,
+            zoom_output_path,
+            compare_prediction=compare_trajs,
+            compare_label=compare_label,
+        )
 
 
 def _get_full_track(node) -> np.ndarray:
@@ -429,7 +505,12 @@ def _save_gif(image_paths: List[str], gif_path: str, duration: float) -> bool:
 def main() -> None:
     args = parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    config = load_config(args.config, args.checkpoint)
+    config = load_config(
+        args.config,
+        args.checkpoint,
+        exp_name_override=args.exp_name,
+        test_epochs=args.test_epochs,
+    )
     model, eval_env, hyperparams = build_inference_components(
         config, args.checkpoint, device
     )
@@ -445,6 +526,36 @@ def main() -> None:
         args.timestep_stride,
     )
 
+    compare_frame_predictions: Optional[List[FramePrediction]] = None
+    compare_predicted_tracks_deg: Optional[List[np.ndarray]] = None
+    if args.compare:
+        compare_config = load_config(
+            args.compare_config,
+            args.compare_checkpoint,
+            exp_name_override=args.compare_exp_name,
+            test_epochs=args.compare_test_epochs,
+        )
+        compare_model, compare_eval_env, compare_hypers = build_inference_components(
+            compare_config,
+            args.compare_checkpoint,
+            device,
+            diffusion_module_path="models.backup.diffusion_tcdiff",
+        )
+        compare_scene_index = _select_scene_index(
+            compare_eval_env,
+            args.scene_name or eval_env.scenes[scene_index].name,
+            args.scene_index,
+        )
+        compare_frame_predictions, _ = collect_frame_predictions(
+            compare_model,
+            compare_eval_env,
+            compare_hypers,
+            args.sampling,
+            args.step,
+            compare_scene_index,
+            args.timestep_stride,
+        )
+
     scene = eval_env.scenes[scene_index]
     scene_label = _sanitize_label(args.scene_name or scene.name or f"scene_{scene_index}")
 
@@ -453,6 +564,7 @@ def main() -> None:
         scene_label,
         args.output_dir,
         args.zoom_output_dir,
+        compare_predictions=compare_frame_predictions,
     )
 
     event_gif_created = False
@@ -467,10 +579,13 @@ def main() -> None:
 
     full_track_raw = _get_full_track(target_node)
     history_track_deg, predicted_tracks_deg = _prepare_tracks(
-        frame_predictions, 
-        args.horizon_reduction, 
-        full_track_raw
+        frame_predictions, args.horizon_reduction, full_track_raw
     )
+
+    if compare_frame_predictions:
+        _, compare_predicted_tracks_deg = _prepare_tracks(
+            compare_frame_predictions, args.horizon_reduction, full_track_raw
+        )
 
     summary_predicted = predicted_tracks_deg[0]
     _plot_track_pair(
@@ -478,6 +593,11 @@ def main() -> None:
         summary_predicted,
         args.summary_output,
         "Full typhoon event track (best 6h forecast)",
+        compare_track=(
+            compare_predicted_tracks_deg[0]
+            if compare_predicted_tracks_deg and len(compare_predicted_tracks_deg) > 0
+            else None
+        ),
     )
 
     horizon_hours = [6, 12, 18, 24]
@@ -494,6 +614,12 @@ def main() -> None:
             f"{hours}h best forecast track",
             axes_builder=lambda a, b, c, d: _get_axes_with_raster_basemap(
                 a, b, c, d, "/mnt/e/data/HYP_LR_SR_OB_DR/HYP_LR_SR_OB_DR.tif"
+            ),
+            compare_track=(
+                compare_predicted_tracks_deg[idx]
+                if compare_predicted_tracks_deg
+                and len(compare_predicted_tracks_deg) > idx
+                else None
             ),
         )
         horizon_outputs.append(horizon_output)
