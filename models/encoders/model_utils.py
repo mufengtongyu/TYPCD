@@ -91,7 +91,13 @@ def run_lstm_on_variable_length_seqs(lstm_module, original_seqs, lower_indices=N
         pad_list.append(original_seqs[i, lower_indices[i]:seq_len])  #一个列表 256个torch.Size([8, 12]) 与original_seqs一致
 
     packed_seqs = rnn.pack_sequence(pad_list, enforce_sorted=False) # pad_list：长255 torch.Size([8, 6])
-    packed_output, (h_n, c_n) = lstm_module(packed_seqs)  #packed_seqs和packed_output的0的维度 (17xx,6)--(17xx,128)
+    # packed_output, (h_n, c_n) = lstm_module(packed_seqs)  #packed_seqs和packed_output的0的维度 (17xx,6)--(17xx,128)
+    packed_output, state = lstm_module(packed_seqs)  #packed_seqs和packed_output的0的维度 (17xx,6)--(17xx,128)
+    if isinstance(state, tuple):
+        h_n, c_n = state
+    else:
+        h_n = state
+        c_n = torch.zeros_like(h_n)
     output, _ = rnn.pad_packed_sequence(packed_output,
                                         batch_first=True,
                                         total_length=total_length)
@@ -118,7 +124,13 @@ def run_lstm_on_variable_length_seqs2(lstm_module, original_seqs, encoded_gph_da
     packed_seqs = rnn.pack_sequence(pad_list, enforce_sorted=False) # pad_list：长255 torch.Size([8, 6])
     # 1125
     # packed_output, (h_n, c_n) = lstm_module(packed_seqs)  #packed_seqs和packed_output的0的维度 (17xx,6)--(17xx,128)
+    # packed_output, state = lstm_module(packed_seqs)  #packed_seqs和packed_output的0的维度 (17xx,6)--(17xx,128)
     packed_output, state = lstm_module(packed_seqs)  #packed_seqs和packed_output的0的维度 (17xx,6)--(17xx,128)
+    if isinstance(state, tuple):
+        h_n, c_n = state
+    else:
+        h_n = state
+        c_n = torch.zeros_like(h_n)
     if isinstance(state, tuple):
         h_n, c_n = state
     else:

@@ -514,7 +514,8 @@ class TimeAwareEncoderForENV5Intensity(nn.Module):
             for i in range(B):
                 list_single_key.append(env_data[i][key])
 
-            tensor_single_key = torch.tensor(list_single_key).to(x_encoding.device).to(dtype=torch.float32)  # [B,6]
+            # tensor_single_key = torch.tensor(list_single_key).to(x_encoding.device).to(dtype=torch.float32)  # [B,6]
+            tensor_single_key = torch.tensor(np.array(list_single_key)).to(x_encoding.device).to(dtype=torch.float32)
             if (len(tensor_single_key.shape) == 1):
                 tensor_single_key = tensor_single_key.unsqueeze(1)
 

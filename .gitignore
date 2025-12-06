@@ -31,8 +31,8 @@ venv/
 
 # ==== 实验输出 / 中间结果 ====
 experiments/
-models/backup/
-models/encoders/backup/
+# models/backup/
+# models/encoders/backup/
 logs/
 runs/
 output/

@@ -131,7 +131,6 @@ def compute_ade_x_y_traj_each_time(predicted_trajs, gt_traj):
         min_value_of_4_time[t], min_index[t] = torch.min(loss[:, t], dim=0)
 
     mean_value_of_4_time = torch.mean(loss, dim=0)
-
     sum_min_value = torch.sum(min_value_of_4_time, dim=-1)
     sum_mean_value = torch.sum(mean_value_of_4_time, dim=-1)
 
@@ -182,9 +181,12 @@ def compute_ade_x_y_intensity_each_time(predicted_trajs, gt_traj):
 
     mean_value_intensity = torch.mean(abs_inten, dim=0)
     mean_value_wind = torch.mean(abs_wind, dim=0)
-
+    
     sum_min_value_intensity = torch.sum(min_value_intensity, dim=-1)
     sum_min_value_wind = torch.sum(min_value_wind, dim=-1)
+    sum_mean_value_intensity = torch.sum(mean_value_intensity, dim=-1)
+    sum_mean_value_wind = torch.sum(mean_value_wind, dim=-1)
+
     sum_mean_value_intensity = torch.sum(mean_value_intensity, dim=-1)
     sum_mean_value_wind = torch.sum(mean_value_wind, dim=-1)
 
