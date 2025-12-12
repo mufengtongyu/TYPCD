@@ -13,6 +13,7 @@ import matplotlib
 matplotlib.use("Agg")  # 使用无界面后端，避免 Qt/Wayland 问题
 
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 import numpy as np
 import torch
 import yaml
@@ -51,7 +52,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--scene-index",
         type=int,
-        default=2,
+        default=0,
         help="Index of the evaluation scene to visualize",
     )
     parser.add_argument(
@@ -203,6 +204,20 @@ def denormalize_positions(points: np.ndarray) -> np.ndarray:
     # simply convert to degrees.
     if np.nanmax(np.abs(points)) > 400:
         return points / 10.0
+    
+    # Heuristic: if the coordinates are already in plausible geographic degree
+    # bounds for the Northwest Pacific dataset, return them unchanged to avoid
+    # double-applying the affine transform used for normalized tensors.
+    lon_valid = points[..., 0][np.isfinite(points[..., 0])]
+    lat_valid = points[..., 1][np.isfinite(points[..., 1])]
+    if lon_valid.size > 0 and lat_valid.size > 0:
+        if (
+            lon_valid.min() >= 80
+            and lon_valid.max() <= 200
+            and lat_valid.min() >= -10
+            and lat_valid.max() <= 60
+        ):
+            return points
 
     lon_tenth = points[..., 0] / 10.0 * 500.0 + 1300.0
     lat_tenth = points[..., 1] / 6.0 * 300.0 + 300.0
@@ -321,6 +336,8 @@ def _get_axes_with_basemap(lon_min: float, lon_max: float, lat_min: float, lat_m
         gl = ax.gridlines(draw_labels=True, linestyle="--", linewidth=0.5)
         gl.top_labels = False
         gl.right_labels = False
+        gl.xlabel_style = {"size": 12}
+        gl.ylabel_style = {"size": 12}
         plot_kwargs = {"transform": ccrs.PlateCarree()}
     except ImportError:
         fig, ax = plt.subplots(figsize=(10, 8))
@@ -329,6 +346,7 @@ def _get_axes_with_basemap(lon_min: float, lon_max: float, lat_min: float, lat_m
         ax.set_xlabel("Longitude (°)")
         ax.set_ylabel("Latitude (°)")
         ax.grid(True, linestyle="--", linewidth=0.5)
+        ax.tick_params(axis="both", labelsize=12)
         plot_kwargs = {}
     return fig, ax, plot_kwargs
 
@@ -361,6 +379,8 @@ def _get_axes_with_raster_basemap(
         gl = ax.gridlines(draw_labels=True, linestyle="--", linewidth=0.5)
         gl.top_labels = False
         gl.right_labels = False
+        gl.xlabel_style = {"size": 12}
+        gl.ylabel_style = {"size": 12}
         plot_kwargs = {"transform": ccrs.PlateCarree()}
     except ImportError:
         fig, ax = plt.subplots(figsize=figsize)
@@ -369,6 +389,7 @@ def _get_axes_with_raster_basemap(
         ax.set_xlabel("Longitude (°)")
         ax.set_ylabel("Latitude (°)")
         ax.grid(True, linestyle="--", linewidth=0.5)
+        ax.tick_params(axis="both", labelsize=12)
         plot_kwargs = {}
 
     return fig, ax, plot_kwargs
@@ -389,10 +410,19 @@ def _plot_tracks_on_axis(
 ):
     current_point = history_deg[-1]
 
+    cone_handles: List[mpatches.Patch] = []
+
     cone_points = np.vstack([current_point, predicted_deg.reshape(-1, 2)])
     cone_hull = _convex_hull(cone_points)
     if show_cone and len(cone_hull) >= 3:
-        ax.plot([], [], label=f"{model_label} probability cone", **plot_kwargs)
+        cone_handles.append(
+            mpatches.Patch(
+                color=color,
+                alpha=0.35,
+                label=f"{model_label} probability cone",
+                zorder=1,
+            )
+        )
         ax.fill(
             cone_hull[:, 0],
             cone_hull[:, 1],
@@ -410,7 +440,8 @@ def _plot_tracks_on_axis(
             color="black",
             markerfacecolor="black",
             markeredgecolor="black",
-            markersize=2,
+            markersize=8,
+            linewidth=3,
             label="History",
             zorder=3,
             **plot_kwargs,
@@ -424,7 +455,8 @@ def _plot_tracks_on_axis(
             color="red",
             markerfacecolor="red",
             markeredgecolor="red",
-            markersize=2,
+            markersize=8,
+            linewidth=3,
             label="Future ground truth",
             zorder=3,
             **plot_kwargs,
@@ -435,7 +467,8 @@ def _plot_tracks_on_axis(
             "o",
             color="blue",
             label="Current position",
-            markersize=3,
+            markersize=8,
+            linewidth=3,
             zorder=8,
             **plot_kwargs,
         )
@@ -450,7 +483,7 @@ def _plot_tracks_on_axis(
                 color=color,
                 markerfacecolor=color,
                 markeredgecolor=color,
-                markersize=1,
+                markersize=2,
                 linewidth=1,
                 label=(f"{model_label} predicted trajectories" if idx == 0 else None),
                 zorder=6,
@@ -466,12 +499,16 @@ def _plot_tracks_on_axis(
         color=color,
         markerfacecolor=color,
         markeredgecolor=color,
-        markersize=2,
-        linewidth=1.5,
+        marker="o",
+        markersize=8,
+        linewidth=2,
+        linestyle="-",
         label=f"{model_label} ensemble mean trajectory",
         zorder=7,
         **plot_kwargs,
     )
+
+    return cone_handles
 
 
 def plot_paths(
@@ -484,38 +521,51 @@ def plot_paths(
     compare_prediction: Optional[np.ndarray] = None,
     compare_label: str = "TC-Diffuser",
     compare_color: str = "darkorange",
+    save_full: bool = True,
+    save_zoom: bool = True,
 ):
     raster_path = "/mnt/e/data/HYP_LR_SR_OB_DR/HYP_LR_SR_OB_DR.tif"
     predicted_deg = denormalize_positions(np.asarray(predicted_trajs))
     history_deg = denormalize_positions(np.asarray(history))
     future_deg = denormalize_positions(np.asarray(future))
+    compare_deg = None
 
-    # Full Northwest Pacific view
-    fig, ax, plot_kwargs = _get_axes_with_raster_basemap(
-        100, 180, 0, 50, raster_path
+    compare_deg = (
+        denormalize_positions(np.asarray(compare_prediction))
+        if compare_prediction is not None
+        else None
     )
-    _plot_tracks_on_axis(ax, predicted_deg, history_deg, future_deg, plot_kwargs)
-    if compare_prediction is not None:
-        compare_deg = denormalize_positions(np.asarray(compare_prediction))
-        _plot_tracks_on_axis(
-            ax,
-            compare_deg,
-            history_deg,
-            future_deg,
-            plot_kwargs,
-            color=compare_color,
-            model_label=compare_label,
-            show_members=False,
-            draw_history=False,
+    if save_full:
+        fig, ax, plot_kwargs = _get_axes_with_raster_basemap(
+            100, 180, 0, 50, raster_path
         )
-    ax.legend(loc="best")
+        legend_handles: List[mpatches.Patch] = []
+        legend_handles += _plot_tracks_on_axis(
+            ax, predicted_deg, history_deg, future_deg, plot_kwargs
+        )
+        if compare_deg is not None:
+            legend_handles += _plot_tracks_on_axis(
+                ax,
+                compare_deg,
+                history_deg,
+                future_deg,
+                plot_kwargs,
+                color=compare_color,
+                model_label=compare_label,
+                show_members=False,
+                draw_history=False,
+            )
+        handles, labels = ax.get_legend_handles_labels()
+        handles.extend(legend_handles)
+        labels.extend([h.get_label() for h in legend_handles])
+        ax.legend(handles, labels, loc="best", fontsize=12)
 
-    output_dir = os.path.dirname(output_path)
-    if output_dir:
-        os.makedirs(output_dir, exist_ok=True)
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=500, bbox_inches="tight", pad_inches=0)
-    plt.close(fig)
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=500, bbox_inches="tight", pad_inches=0)
+        plt.close(fig)
 
     # Zoomed view centered on the track to keep the trajectory near 80% of the frame
     all_points = np.vstack([history_deg, future_deg, predicted_deg.reshape(-1, 2)])
@@ -540,18 +590,38 @@ def plot_paths(
     lat_min_zoom = lat_center - final_height / 2
     lat_max_zoom = lat_center + final_height / 2
 
-    fig_zoom, ax_zoom, plot_kwargs_zoom = _get_axes_with_raster_basemap(
-        lon_min_zoom, lon_max_zoom, lat_min_zoom, lat_max_zoom, raster_path, figsize=(12, 9)
-    )
-    _plot_tracks_on_axis(ax_zoom, predicted_deg, history_deg, future_deg, plot_kwargs_zoom)
-    # If no zoom path is supplied, mirror the primary output name.
-    zoom_path = zoom_output_path or output_path.replace(".png", "_zoom.png")
-    zoom_dir = os.path.dirname(zoom_path)
-    if zoom_dir:
-        os.makedirs(zoom_dir, exist_ok=True)
-    fig_zoom.tight_layout()
-    fig_zoom.savefig(zoom_path, dpi=300, bbox_inches="tight", pad_inches=0)
-    plt.close(fig_zoom)
+    if save_zoom:
+        fig_zoom, ax_zoom, plot_kwargs_zoom = _get_axes_with_raster_basemap(
+            lon_min_zoom, lon_max_zoom, lat_min_zoom, lat_max_zoom, raster_path, figsize=(12, 9)
+        )
+        legend_handles_zoom: List[mpatches.Patch] = []
+        legend_handles_zoom += _plot_tracks_on_axis(
+            ax_zoom, predicted_deg, history_deg, future_deg, plot_kwargs_zoom
+        )
+        if compare_deg is not None:
+            legend_handles_zoom += _plot_tracks_on_axis(
+                ax_zoom,
+                compare_deg,
+                history_deg,
+                future_deg,
+                plot_kwargs_zoom,
+                color=compare_color,
+                model_label=compare_label,
+                show_members=False,
+                draw_history=False,
+            )
+        zoom_handles, zoom_labels = ax_zoom.get_legend_handles_labels()
+        zoom_handles.extend(legend_handles_zoom)
+        zoom_labels.extend([h.get_label() for h in legend_handles_zoom])
+        ax_zoom.legend(zoom_handles, zoom_labels, loc="best", fontsize=12)
+        # If no zoom path is supplied, mirror the primary output name.
+        zoom_path = zoom_output_path or output_path.replace(".png", "_zoom.png")
+        zoom_dir = os.path.dirname(zoom_path)
+        if zoom_dir:
+            os.makedirs(zoom_dir, exist_ok=True)
+        fig_zoom.tight_layout()
+        fig_zoom.savefig(zoom_path, dpi=300, bbox_inches="tight", pad_inches=0)
+        plt.close(fig_zoom)
 
 
 def main():

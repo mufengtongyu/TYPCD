@@ -73,9 +73,22 @@ def parse_args() -> argparse.Namespace:
         help="Directory to save the zoomed-in visualizations",
     )
     parser.add_argument(
-        "--summary-output",
-        default="fig/typhoon_event_track.png",
-        help="Path to save the full-event track visualization",
+        "--typhoon-event",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable saving per-frame typhoon_event plots (full view).",
+    )
+    parser.add_argument(
+        "--typhoon-event-zoom",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable saving per-frame typhoon_event_zoom plots.",
+    )
+    parser.add_argument(
+        "--typhoon-event-horizons",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable saving typhoon_event_horizons summary plots.",
     )
     parser.add_argument(
         "--horizon-output-dir",
@@ -121,7 +134,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--compare",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help="Enable overlaying TC-Diffuser results for typhoon_event and typhoon_event_horizons plots.",
     )
     parser.add_argument(
@@ -191,6 +204,9 @@ def _best_predictions_by_horizon(
 ) -> np.ndarray:
     """Return per-horizon representative predictions using the requested reduction."""
 
+    predicted_trajs = denormalize_positions(predicted_trajs)
+    future = denormalize_positions(future)
+
     future = future[: predicted_trajs.shape[1]]
     if future.shape[0] == 0:
         return np.empty((0, 2))
@@ -241,6 +257,8 @@ def _get_axes_with_raster_basemap(
         gl = ax.gridlines(draw_labels=True, linestyle="--", linewidth=0.5)
         gl.top_labels = False
         gl.right_labels = False
+        gl.xlabel_style = {"size": 12}
+        gl.ylabel_style = {"size": 12}
         plot_kwargs = {"transform": ccrs.PlateCarree()}
     except ImportError:
         fig, ax = plt.subplots(figsize=(10, 8))
@@ -249,6 +267,7 @@ def _get_axes_with_raster_basemap(
         ax.set_xlabel("Longitude (°)")
         ax.set_ylabel("Latitude (°)")
         ax.grid(True, linestyle="--", linewidth=0.5)
+        ax.tick_params(axis="both", labelsize=12)
         plot_kwargs = {}
 
     return fig, ax, plot_kwargs
@@ -298,7 +317,7 @@ def _plot_track_pair(
             **plot_kwargs,
         )
     ax.set_title(title)
-    ax.legend(loc="best")
+    ax.legend(loc="best", fontsize=12)
     output_dir = os.path.dirname(output_path)
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
@@ -413,11 +432,18 @@ def save_frame_visualizations(
     output_dir: str,
     zoom_output_dir: str,
     *,
+    enable_full: bool = True,
+    enable_zoom: bool = True,
     compare_predictions: Optional[List[FramePrediction]] = None,
     compare_label: str = "TC-Diffuser",
 ) -> None:
-    os.makedirs(output_dir, exist_ok=True)
-    os.makedirs(zoom_output_dir, exist_ok=True)
+    if not enable_full and not enable_zoom:
+        return
+
+    if enable_full:
+        os.makedirs(output_dir, exist_ok=True)
+    if enable_zoom:
+        os.makedirs(zoom_output_dir, exist_ok=True)
 
     compare_lookup: Dict[int, FramePrediction] = {}
     if compare_predictions:
@@ -428,8 +454,10 @@ def save_frame_visualizations(
 
     for ts, predicted_trajs, history_raw, future_raw in frame_predictions:
         base_name = f"{scene_label}_t{ts:04d}"
-        output_path = os.path.join(output_dir, f"{base_name}.png")
-        zoom_output_path = os.path.join(zoom_output_dir, f"{base_name}.png")
+        output_path = os.path.join(output_dir, f"{base_name}.png") if enable_full else None
+        zoom_output_path = (
+            os.path.join(zoom_output_dir, f"{base_name}.png") if enable_zoom else None
+        )
         compare_trajs = None
         if compare_lookup and ts in compare_lookup:
             compare_trajs = compare_lookup[ts][0]
@@ -437,10 +465,12 @@ def save_frame_visualizations(
             predicted_trajs,
             history_raw,
             future_raw,
-            output_path,
+            output_path or zoom_output_path,
             zoom_output_path,
             compare_prediction=compare_trajs,
             compare_label=compare_label,
+            save_full=enable_full,
+            save_zoom=enable_zoom,
         )
 
 
@@ -475,7 +505,7 @@ def _prepare_tracks(
     if not predicted_by_horizon:
         raise RuntimeError("Unable to derive predicted tracks for any horizon.")
 
-    predicted_tracks_deg = [denormalize_positions(np.vstack(track)) for track in predicted_by_horizon]
+    predicted_tracks_deg = [np.vstack(track) for track in predicted_by_horizon]
     return history_track_deg, predicted_tracks_deg
 
 
@@ -540,6 +570,7 @@ def main() -> None:
             args.compare_checkpoint,
             device,
             diffusion_module_path="models.backup.diffusion_tcdiff",
+            strict_weights=False,
         )
         compare_scene_index = _select_scene_index(
             compare_eval_env,
@@ -559,16 +590,24 @@ def main() -> None:
     scene = eval_env.scenes[scene_index]
     scene_label = _sanitize_label(args.scene_name or scene.name or f"scene_{scene_index}")
 
-    save_frame_visualizations(
-        frame_predictions,
-        scene_label,
-        args.output_dir,
-        args.zoom_output_dir,
-        compare_predictions=compare_frame_predictions,
-    )
+    if args.typhoon_event or args.typhoon_event_zoom:
+        save_frame_visualizations(
+            frame_predictions,
+            scene_label,
+            args.output_dir,
+            args.zoom_output_dir,
+            enable_full=args.typhoon_event,
+            enable_zoom=args.typhoon_event_zoom,
+            compare_predictions=compare_frame_predictions,
+        )
+    else:
+        print(
+            "Skipping per-frame plot generation because both typhoon_event and "
+            "typhoon_event_zoom outputs are disabled."
+        )
 
     event_gif_created = False
-    if args.event_gif:
+    if args.event_gif and args.typhoon_event:
         frame_paths = sorted(
             os.path.join(args.output_dir, fname)
             for fname in os.listdir(args.output_dir)
@@ -577,78 +616,57 @@ def main() -> None:
         event_gif_path = os.path.join(args.output_dir, f"{scene_label}.gif")
         event_gif_created = _save_gif(frame_paths, event_gif_path, args.event_gif_interval)
 
-    full_track_raw = _get_full_track(target_node)
-    history_track_deg, predicted_tracks_deg = _prepare_tracks(
-        frame_predictions, args.horizon_reduction, full_track_raw
-    )
-
-    if compare_frame_predictions:
-        _, compare_predicted_tracks_deg = _prepare_tracks(
-            compare_frame_predictions, args.horizon_reduction, full_track_raw
-        )
-
-    summary_predicted = predicted_tracks_deg[0]
-    _plot_track_pair(
-        history_track_deg,
-        summary_predicted,
-        args.summary_output,
-        "Full typhoon event track (best 6h forecast)",
-        compare_track=(
-            compare_predicted_tracks_deg[0]
-            if compare_predicted_tracks_deg and len(compare_predicted_tracks_deg) > 0
-            else None
-        ),
-    )
-
-    horizon_hours = [6, 12, 18, 24]
-    os.makedirs(args.horizon_output_dir, exist_ok=True)
-    horizon_outputs: List[str] = []
-    for idx, hours in enumerate(horizon_hours[: len(predicted_tracks_deg)]):
-        horizon_output = os.path.join(
-            args.horizon_output_dir, f"{scene_label}_{hours}h_track.png"
-        )
-        _plot_track_pair(
-            history_track_deg,
-            predicted_tracks_deg[idx],
-            horizon_output,
-            f"{hours}h best forecast track",
-            axes_builder=lambda a, b, c, d: _get_axes_with_raster_basemap(
-                a, b, c, d, "/mnt/e/data/HYP_LR_SR_OB_DR/HYP_LR_SR_OB_DR.tif"
-            ),
-            compare_track=(
-                compare_predicted_tracks_deg[idx]
-                if compare_predicted_tracks_deg
-                and len(compare_predicted_tracks_deg) > idx
-                else None
-            ),
-        )
-        horizon_outputs.append(horizon_output)
-
     horizon_gif_created = False
-    if args.horizon_gif:
-        horizon_gif_path = os.path.join(args.horizon_output_dir, f"{scene_label}_horizons.gif")
-        horizon_gif_created = _save_gif(
-            sorted(horizon_outputs), horizon_gif_path, args.horizon_gif_interval
-        )
-        horizon_outputs.append(horizon_output)
-
-    horizon_gif_created = False
-    if args.horizon_gif:
-        horizon_gif_path = os.path.join(args.horizon_output_dir, f"{scene_label}_horizons.gif")
-        horizon_gif_created = _save_gif(
-            sorted(horizon_outputs), horizon_gif_path, args.horizon_gif_interval
+    if args.typhoon_event_horizons:
+        full_track_raw = _get_full_track(target_node)
+        history_track_deg, predicted_tracks_deg = _prepare_tracks(
+            frame_predictions, args.horizon_reduction, full_track_raw
         )
 
-    print(
-        f"Saved {len(frame_predictions)} frame(s) for scene '{scene_label}' "
-        f"to '{args.output_dir}' and '{args.zoom_output_dir}'."
-    )
-    print(
-        f"Saved full-event tracks to '{args.summary_output}' and horizon plots to "
-        f"'{args.horizon_output_dir}'."
-    )
+        compare_predicted_tracks_deg = None
+        if compare_frame_predictions:
+            _, compare_predicted_tracks_deg = _prepare_tracks(
+                compare_frame_predictions, args.horizon_reduction, full_track_raw
+            )
+
+        horizon_hours = [6, 12, 18, 24]
+        os.makedirs(args.horizon_output_dir, exist_ok=True)
+        horizon_outputs: List[str] = []
+        for idx, hours in enumerate(horizon_hours[: len(predicted_tracks_deg)]):
+            horizon_output = os.path.join(
+                args.horizon_output_dir, f"{scene_label}_{hours}h_track.png"
+            )
+            _plot_track_pair(
+                history_track_deg,
+                predicted_tracks_deg[idx],
+                horizon_output,
+                f"{hours}h best forecast track",
+                axes_builder=lambda a, b, c, d: _get_axes_with_raster_basemap(
+                    a, b, c, d, "/mnt/e/data/HYP_LR_SR_OB_DR/HYP_LR_SR_OB_DR.tif"
+                ),
+                compare_track=(
+                    compare_predicted_tracks_deg[idx]
+                    if compare_predicted_tracks_deg
+                    and len(compare_predicted_tracks_deg) > idx
+                    else None
+                ),
+            )
+            horizon_outputs.append(horizon_output)
+    
+    if args.horizon_gif:
+            horizon_gif_path = os.path.join(
+                args.horizon_output_dir, f"{scene_label}_horizons.gif"
+            )
+            horizon_gif_created = _save_gif(
+                sorted(horizon_outputs), horizon_gif_path, args.horizon_gif_interval
+            )
+    else:
+        print("Skipping typhoon_event_horizons plots because they were disabled.")
+
     if args.event_gif:
-        if not event_gif_created:
+        if not args.typhoon_event:
+            print("Event GIF generation skipped because typhoon_event plots are disabled.")
+        elif not event_gif_created:
             print("Event GIF generation was requested but no frames were available to combine.")
     else:
         print(
@@ -656,16 +674,16 @@ def main() -> None:
             "This is enabled by default; omit the flag to generate a typhoon_event GIF."
         )
 
-    if args.horizon_gif:
-        if not horizon_gif_created:
+    if args.typhoon_event_horizons:
+        if args.horizon_gif and not horizon_gif_created:
             print(
                 "Horizon GIF generation was requested but no per-horizon images were found."
             )
-    else:
-        print(
-            "GIF creation for horizon summaries is disabled because --no-horizon-gif was used. "
-            "This is enabled by default; omit the flag to generate a typhoon_event_horizons GIF."
-        )
+    elif not args.horizon_gif:
+            print(
+                "GIF creation for horizon summaries is disabled because --no-horizon-gif was used. "
+                "This is enabled by default; omit the flag to generate a typhoon_event_horizons GIF."
+            )
 
 
 if __name__ == "__main__":
