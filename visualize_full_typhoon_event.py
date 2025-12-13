@@ -64,13 +64,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-dir",
-        default="fig/typhoon_event",
-        help="Directory to save the full-view visualizations",
+        default="typhoon_event",
+        help="Directory (inside the scene-index folder) for full-view visualizations",
     )
     parser.add_argument(
         "--zoom-output-dir",
-        default="fig/typhoon_event_zoom",
-        help="Directory to save the zoomed-in visualizations",
+        default="typhoon_event_zoom",
+        help="Directory (inside the scene-index folder) for zoomed-in visualizations",
     )
     parser.add_argument(
         "--typhoon-event",
@@ -92,8 +92,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--horizon-output-dir",
-        default="fig/typhoon_event_horizons",
-        help="Directory to save per-horizon track visualizations",
+        default="typhoon_event_horizons",
+        help="Directory (inside the scene-index folder) for per-horizon track visualizations",
     )
     parser.add_argument(
         "--event-gif",
@@ -162,7 +162,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--scene-index",
         type=int,
-        default=1,
+        default=67,
         help="Index of the evaluation scene to visualize",
     )
     parser.add_argument(
@@ -546,6 +546,11 @@ def main() -> None:
     )
 
     scene_index = _select_scene_index(eval_env, args.scene_name, args.scene_index)
+    scene_output_root = os.path.join("fig", f"{scene_index}-")
+
+    output_dir = os.path.join(scene_output_root, args.output_dir)
+    zoom_output_dir = os.path.join(scene_output_root, args.zoom_output_dir)
+    horizon_output_dir = os.path.join(scene_output_root, args.horizon_output_dir)
     frame_predictions, target_node = collect_frame_predictions(
         model,
         eval_env,
@@ -594,8 +599,8 @@ def main() -> None:
         save_frame_visualizations(
             frame_predictions,
             scene_label,
-            args.output_dir,
-            args.zoom_output_dir,
+            output_dir,
+            zoom_output_dir,
             enable_full=args.typhoon_event,
             enable_zoom=args.typhoon_event_zoom,
             compare_predictions=compare_frame_predictions,
@@ -609,11 +614,11 @@ def main() -> None:
     event_gif_created = False
     if args.event_gif and args.typhoon_event:
         frame_paths = sorted(
-            os.path.join(args.output_dir, fname)
-            for fname in os.listdir(args.output_dir)
+            os.path.join(output_dir, fname)
+            for fname in os.listdir(output_dir)
             if fname.lower().endswith(".png")
         )
-        event_gif_path = os.path.join(args.output_dir, f"{scene_label}.gif")
+        event_gif_path = os.path.join(output_dir, f"{scene_label}.gif")
         event_gif_created = _save_gif(frame_paths, event_gif_path, args.event_gif_interval)
 
     horizon_gif_created = False
@@ -630,11 +635,11 @@ def main() -> None:
             )
 
         horizon_hours = [6, 12, 18, 24]
-        os.makedirs(args.horizon_output_dir, exist_ok=True)
+        os.makedirs(horizon_output_dir, exist_ok=True)
         horizon_outputs: List[str] = []
         for idx, hours in enumerate(horizon_hours[: len(predicted_tracks_deg)]):
             horizon_output = os.path.join(
-                args.horizon_output_dir, f"{scene_label}_{hours}h_track.png"
+                horizon_output_dir, f"{scene_label}_{hours}h_track.png"
             )
             _plot_track_pair(
                 history_track_deg,
@@ -655,7 +660,7 @@ def main() -> None:
     
     if args.horizon_gif:
             horizon_gif_path = os.path.join(
-                args.horizon_output_dir, f"{scene_label}_horizons.gif"
+                horizon_output_dir, f"{scene_label}_horizons.gif"
             )
             horizon_gif_created = _save_gif(
                 sorted(horizon_outputs), horizon_gif_path, args.horizon_gif_interval
