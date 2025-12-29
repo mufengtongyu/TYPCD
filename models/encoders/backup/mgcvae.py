@@ -2530,6 +2530,32 @@ class MultimodalGenerativeCVAE(object):
             return our_sampled_future
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 import warnings
 import torch
 import torch.nn as nn

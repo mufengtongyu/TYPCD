@@ -81,19 +81,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--typhoon-event-zoom",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help="Enable saving per-frame typhoon_event_zoom plots.",
     )
     parser.add_argument(
         "--typhoon-event-horizons",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=True,
         help="Enable saving typhoon_event_horizons summary plots.",
+    )
+    parser.add_argument(
+        "--typhoon-event-time-series",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable saving latitude/longitude time-series plots for typhoon_event frames.",
     )
     parser.add_argument(
         "--horizon-output-dir",
         default="typhoon_event_horizons",
         help="Directory (inside the scene-index folder) for per-horizon track visualizations",
+    )
+    parser.add_argument(
+        "--time-series-output-dir",
+        default="typhoon_event_time_series",
+        help="Directory (inside the scene-index folder) for time-series visualizations",
     )
     parser.add_argument(
         "--event-gif",
@@ -162,7 +173,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--scene-index",
         type=int,
-        default=67,
+        default=40,
         help="Index of the evaluation scene to visualize",
     )
     parser.add_argument(
@@ -317,7 +328,7 @@ def _plot_track_pair(
             **plot_kwargs,
         )
     ax.set_title(title)
-    ax.legend(loc="best", fontsize=12)
+    ax.legend(loc="best", fontsize=16)
     output_dir = os.path.dirname(output_path)
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
@@ -474,6 +485,109 @@ def save_frame_visualizations(
         )
 
 
+def _plot_time_series(
+    output_path: str,
+    time_hours: np.ndarray,
+    ground_truth: np.ndarray,
+    ensemble_members: np.ndarray,
+    *,
+    ylabel: str,
+) -> None:
+    """Plot a time-series comparison of ensemble predictions vs ground truth."""
+
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    ax.plot(
+        time_hours,
+        ground_truth,
+        color="red",
+        linewidth=3,
+        linestyle="-",
+        marker="o",
+        markersize=7,
+        label="Ground truth",
+    )
+    ensemble_mean = np.nanmean(ensemble_members, axis=0)
+    ax.plot(
+        time_hours,
+        ensemble_mean,
+        color="green",
+        linewidth=3,
+        linestyle="-.",
+        marker="o",
+        markersize=7,
+        label="Ensemble mean",
+    )
+    for idx in range(ensemble_members.shape[0]):
+        ax.plot(
+            time_hours,
+            ensemble_members[idx],
+            color="green",
+            linewidth=1,
+            linestyle="--",
+            alpha=0.8,
+            marker="o",
+            markersize=4,
+            label="Ensemble member" if idx == 0 else None,
+        )
+    min_band = np.nanmin(ensemble_members, axis=0)
+    max_band = np.nanmax(ensemble_members, axis=0)
+    ax.fill_between(
+        time_hours,
+        min_band,
+        max_band,
+        color="green",
+        alpha=0.2,
+        label="Ensemble spread",
+    )
+    ax.set_xlabel("Forecast time (hours)")
+    ax.set_ylabel(ylabel)
+    ax.set_xticks(time_hours)
+    ax.grid(True, linestyle="--", linewidth=0.6, alpha=0.7)
+    ax.legend(loc="best", fontsize=16)
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def save_frame_time_series(
+    frame_predictions: List[FramePrediction],
+    scene_label: str,
+    output_dir: str,
+) -> None:
+    os.makedirs(output_dir, exist_ok=True)
+    for ts, predicted_trajs, _history_raw, future_raw in frame_predictions:
+        predicted_deg = denormalize_positions(np.asarray(predicted_trajs))
+        future_deg = denormalize_positions(np.asarray(future_raw))
+
+        horizon_steps = future_deg.shape[0]
+        time_hours = np.arange(1, horizon_steps + 1) * 6
+
+        lat_truth = future_deg[:, 1]
+        lon_truth = future_deg[:, 0]
+        lat_members = predicted_deg[:, :horizon_steps, 1]
+        lon_members = predicted_deg[:, :horizon_steps, 0]
+
+        base_name = f"{scene_label}_t{ts:04d}"
+        lat_output = os.path.join(output_dir, f"{base_name}_lat.png")
+        lon_output = os.path.join(output_dir, f"{base_name}_lon.png")
+
+        _plot_time_series(
+            lat_output,
+            time_hours,
+            lat_truth,
+            lat_members,
+            ylabel="Latitude (°)",
+        )
+        _plot_time_series(
+            lon_output,
+            time_hours,
+            lon_truth,
+            lon_members,
+            ylabel="Longitude (°)",
+        )
+
+
 def _get_full_track(node) -> np.ndarray:
     """Extract the full ground-truth track for the given node."""
 
@@ -551,6 +665,9 @@ def main() -> None:
     output_dir = os.path.join(scene_output_root, args.output_dir)
     zoom_output_dir = os.path.join(scene_output_root, args.zoom_output_dir)
     horizon_output_dir = os.path.join(scene_output_root, args.horizon_output_dir)
+    time_series_output_dir = os.path.join(
+        scene_output_root, args.time_series_output_dir
+    )
     frame_predictions, target_node = collect_frame_predictions(
         model,
         eval_env,
@@ -611,6 +728,11 @@ def main() -> None:
             "typhoon_event_zoom outputs are disabled."
         )
 
+    if args.typhoon_event_zoom and args.typhoon_event_time_series:
+        save_frame_time_series(frame_predictions, scene_label, time_series_output_dir)
+    elif args.typhoon_event_time_series and not args.typhoon_event_zoom:
+        print("Skipping time-series plots because typhoon_event_zoom outputs are disabled.")
+    
     event_gif_created = False
     if args.event_gif and args.typhoon_event:
         frame_paths = sorted(
@@ -693,6 +815,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
 
 
